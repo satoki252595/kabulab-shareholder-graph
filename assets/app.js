@@ -1,12 +1,18 @@
 const KIND_COLOR = {
-  corp: "#0c5552",
-  inst: "#2a4a66",
-  foreign: "#2a4a66",
-  person: "#7a5424",
-  employee: "#7a5424",
-  insurer: "#7a5424",
-  broker: "#5d6b73",
+  corp: "#8ecae6",
+  inst: "#90b4ed",
+  foreign: "#90b4ed",
+  person: "#e7c27d",
+  employee: "#e7c27d",
+  insurer: "#e7c27d",
+  broker: "#d5dde6",
 };
+const SECTOR_PALETTE = [
+  "#8eb6ff", "#f0a27a", "#7dcea0", "#e7c27d", "#d4a5ff",
+  "#7fd1c7", "#f5a3b5", "#a9c4ff", "#f3b6dd", "#c6e38a",
+  "#f0c36a", "#8ad7ea", "#f0b7a0", "#b9b6f8", "#9ed9a8",
+  "#f2be8a", "#9bb6f0", "#e8a0b4",
+];
 const KIND_LABEL = {
   corp: "事業会社",
   inst: "機関",
@@ -20,13 +26,20 @@ const KIND_LABEL = {
 const state = {
   data: null,
   by: new Map(),
-  mode: "ego",
+  adj: new Map(),
+  mode: "all",
+  depth: 1,
   focus: "9435",
   hover: null,
   suggest: 0,
   matches: [],
-  cam: { x: 0, y: 0, k: 1 },
+  cam: { x: 0, y: 0, k: 0.72 },
   drag: null,
+  dragNode: null,
+  moved: false,
+  layoutKey: "",
+  model: null,
+  sectorColor: new Map(),
 };
 
 const canvas = document.querySelector("#graph");
@@ -74,10 +87,13 @@ function company(code) {
 function select(code) {
   if (!state.by.has(code)) return;
   state.focus = code;
-  state.mode = "ego";
+  state.mode = "local";
+  state.layoutKey = "";
+  state.cam = { x: 0, y: 0, k: 1 };
   document.querySelectorAll(".mode").forEach((b) => {
-    b.setAttribute("aria-selected", b.dataset.mode === "ego" ? "true" : "false");
+    b.setAttribute("aria-selected", b.dataset.mode === "local" ? "true" : "false");
   });
+  document.querySelector("#depth").hidden = false;
   suggest.hidden = true;
   q.value = `${code} ${company(code).name}`;
   renderDetail();
@@ -232,7 +248,27 @@ document.addEventListener("keydown", (ev) => {
 document.querySelectorAll(".mode").forEach((btn) => {
   btn.addEventListener("click", () => {
     state.mode = btn.dataset.mode;
+    state.layoutKey = "";
+    state.cam = state.mode === "all" ? { x: 0, y: 0, k: 0.72 } : { x: 0, y: 0, k: 1 };
+    document.querySelector("#depth").hidden = state.mode !== "local";
     document.querySelectorAll(".mode").forEach((b) => b.setAttribute("aria-selected", b === btn ? "true" : "false"));
+    draw();
+  });
+});
+document.querySelectorAll("#depth button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    state.depth = Number(btn.dataset.depth);
+    state.layoutKey = "";
+    document.querySelectorAll("#depth button").forEach((b) => {
+      b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+    });
+    if (state.mode !== "local") {
+      state.mode = "local";
+      document.querySelectorAll(".mode").forEach((b) => {
+        b.setAttribute("aria-selected", b.dataset.mode === "local" ? "true" : "false");
+      });
+      document.querySelector("#depth").hidden = false;
+    }
     draw();
   });
 });
@@ -247,159 +283,329 @@ function toScreen(x, y) {
   return [w / 2 + (x + state.cam.x) * state.cam.k, h / 2 + (y + state.cam.y) * state.cam.k];
 }
 
-function egoModel() {
+function sectorOf(code) {
+  const c = company(code);
+  return (c && c.sector) || "未設定";
+}
+
+function colorFor(node) {
+  if (node.listed === false) return KIND_COLOR[node.kind] || "#d5dde6";
+  const sector = node.sector || "未設定";
+  if (!state.sectorColor.has(sector)) {
+    const n = state.sectorColor.size;
+    state.sectorColor.set(sector, SECTOR_PALETTE[n % SECTOR_PALETTE.length]);
+  }
+  return state.sectorColor.get(sector);
+}
+
+function degree(code) {
+  return (state.adj.get(code) || []).length;
+}
+
+function listedNeighbors(code, limit) {
+  const scored = [];
+  const seen = new Set();
+  for (const e of state.adj.get(code) || []) {
+    if (seen.has(e.other)) continue;
+    seen.add(e.other);
+    scored.push(e);
+  }
+  scored.sort((a, b) => b.r - a.r);
+  return scored.slice(0, limit).map((e) => e.other);
+}
+
+function pushNode(nodes, seen, node) {
+  if (seen.has(node.id)) return;
+  seen.add(node.id);
+  nodes.push(node);
+}
+
+function localModel() {
   const c = company(state.focus);
-  const nodes = [{ id: c.code, name: c.name, kind: "corp", role: "center", ratio: null }];
-  const links = [];
-  const seen = new Set([c.code]);
-  (c.holders || []).forEach((h, i) => {
-    const id = h.code || `h${i}`;
-    if (seen.has(id)) return;
-    seen.add(id);
-    nodes.push({ id, name: h.name, kind: h.kind, role: "holder", ratio: h.ratio, code: h.code });
-    links.push({ from: id, to: c.code, r: h.ratio });
-  });
-  holdingsOf(c.code).slice(0, 12).forEach((e) => {
-    if (!seen.has(e.i)) {
-      seen.add(e.i);
-      const n = company(e.i);
-      nodes.push({ id: e.i, name: n.name, kind: "corp", role: "held", ratio: e.r, code: e.i });
-    }
-    links.push({ from: c.code, to: e.i, r: e.r });
-  });
-  const holders = nodes.filter((n) => n.role === "holder");
-  const held = nodes.filter((n) => n.role === "held");
-  holders.forEach((n, i) => {
-    const a = -Math.PI / 2 + ((i + 0.5) / Math.max(holders.length, 1)) * Math.PI;
-    const rad = 168;
-    n.x = Math.cos(a) * rad * (a > Math.PI / 2 ? 1 : -1) - 40;
-    n.y = ((i + 0.5) / Math.max(holders.length, 1) - 0.5) * Math.min(420, 36 * holders.length);
-    n.x = -190;
-    n.y = ((i + 0.5) / Math.max(holders.length, 1) - 0.5) * Math.min(460, 38 * holders.length);
-  });
-  held.forEach((n, i) => {
-    n.x = 210;
-    n.y = ((i + 0.5) / Math.max(held.length, 1) - 0.5) * Math.min(460, 38 * held.length);
-  });
-  nodes[0].x = 0;
-  nodes[0].y = 0;
-  return { nodes, links, note: "左が大株主、右がこの会社の保有先です。上場会社をクリックすると、その銘柄に移ります。" };
-}
-
-function mutualModel() {
   const nodes = [];
-  const links = [];
-  const pairs = state.data.mutual.slice();
-  const half = Math.ceil(pairs.length / 2);
-  pairs.forEach(([a, b], i) => {
-    const col = i < half ? 0 : 1;
-    const row = col === 0 ? i : i - half;
-    const y = (row - (half - 1) / 2) * 32;
-    const x0 = col === 0 ? -250 : 210;
-    const A = company(a);
-    const B = company(b);
-    const idA = `${a}@${i}`;
-    const idB = `${b}@${i}`;
-    nodes.push({ id: idA, code: a, name: A.name, kind: "corp", role: "peer", x: x0, y });
-    nodes.push({ id: idB, code: b, name: B.name, kind: "corp", role: "peer", x: x0 + 150, y });
-    const ab = state.data.edges.find((e) => e.h === a && e.i === b);
-    if (ab) links.push({ from: idA, to: idB, r: ab.r });
+  const seen = new Set();
+  pushNode(nodes, seen, {
+    id: c.code, code: c.code, name: c.name, sector: c.sector, listed: true,
+    kind: "corp", role: "center", deg: degree(c.code),
   });
-  return { nodes, links, note: "1行が1組です。左の会社が右の会社を持っている比率を線の上に出しています。相手方向の比率は行をクリックしたあとで見ます。" };
+  (c.holders || []).forEach((h, i) => {
+    const id = h.code || `holder:${c.code}:${i}`;
+    pushNode(nodes, seen, {
+      id, code: h.code || "", name: h.name, sector: h.code ? sectorOf(h.code) : "",
+      listed: Boolean(h.code), kind: h.kind, role: "link", deg: h.code ? degree(h.code) : 1,
+    });
+  });
+  listedNeighbors(c.code, 18).forEach((id) => {
+    const n = company(id);
+    pushNode(nodes, seen, {
+      id, code: id, name: n.name, sector: n.sector, listed: true,
+      kind: "corp", role: "link", deg: degree(id),
+    });
+  });
+  if (state.depth >= 2) {
+    const first = nodes.filter((n) => n.listed && n.id !== c.code).map((n) => n.id);
+    first.forEach((id) => {
+      listedNeighbors(id, 5).forEach((next) => {
+        if (nodes.length >= 72) return;
+        const n = company(next);
+        pushNode(nodes, seen, {
+          id: next, code: next, name: n.name, sector: n.sector, listed: true,
+          kind: "corp", role: "link", deg: degree(next),
+        });
+      });
+    });
+  }
+  const ids = new Set(nodes.map((n) => n.id));
+  const links = [];
+  const pair = new Set();
+  nodes.forEach((n) => {
+    if (!n.listed) {
+      links.push({ from: n.id, to: c.code, r: ((c.holders || []).find((h) => (h.code || "") === n.code && h.name === n.name) || {}).ratio || 1 });
+      return;
+    }
+    for (const e of state.adj.get(n.id) || []) {
+      if (!ids.has(e.other)) continue;
+      const key = [n.id, e.other].sort().join("|");
+      if (pair.has(key)) continue;
+      pair.add(key);
+      const back = (state.adj.get(e.other) || []).some((x) => x.other === n.id);
+      links.push({ from: n.id, to: e.other, r: e.r, mutual: back });
+    }
+  });
+  seedCircle(nodes);
+  relax(nodes, links, nodes.length > 40 ? 90 : 140);
+  const depthLabel = state.depth === 1 ? "隣だけ" : "隣とその先";
+  return {
+    nodes, links,
+    note: `${c.name} の周辺です。${depthLabel}を出しています。点を押すと、その銘柄のノートに移ります。`,
+  };
 }
 
-function allModel() {
-  const ids = new Set(state.data.edges.flatMap((e) => [e.h, e.i]));
+function globalModel() {
+  const ids = new Set();
+  state.data.edges.forEach((e) => { ids.add(e.h); ids.add(e.i); });
   const nodes = [...ids].map((id) => {
     const c = company(id);
-    const p = state.data.pos[id] || [0, 0];
-    return { id, name: c.name, kind: "corp", role: "peer", code: id, ratio: null, x: p[0] * 460, y: p[1] * 340, pr: c.pr || 0 };
+    const p = state.data.pos[id] || [Math.random() - 0.5, Math.random() - 0.5];
+    return {
+      id, code: id, name: c.name, sector: c.sector, listed: true,
+      kind: "corp", role: "link", deg: degree(id),
+      x: p[0] * 980, y: p[1] * 720,
+    };
   });
-  const links = state.data.edges.map((e) => ({ from: e.h, to: e.i, r: e.r }));
-  return { nodes, links, note: "業種ごとに円周へ置き、出資がある組を少し近づけています。点をクリックすると、その銘柄の周辺に移ります。" };
+  const mutual = new Set(state.data.mutual.map(([a, b]) => [a, b].sort().join("|")));
+  const links = state.data.edges.map((e) => ({
+    from: e.h, to: e.i, r: e.r, mutual: mutual.has([e.h, e.i].sort().join("|")),
+  }));
+  relax(nodes, links, 48);
+  return {
+    nodes, links,
+    note: "出資のある会社だけを、リンクで引き合う配置にしています。点の大きさはつながりの数、色は業種です。点を押すと、その銘柄の周辺に移ります。",
+  };
+}
+
+function seedCircle(nodes) {
+  const center = nodes.find((n) => n.role === "center") || nodes[0];
+  nodes.forEach((n, i) => {
+    if (n === center) { n.x = 0; n.y = 0; return; }
+    const a = (-Math.PI / 2) + (i / nodes.length) * Math.PI * 2;
+    const rad = 150 + (i % 5) * 18;
+    n.x = Math.cos(a) * rad;
+    n.y = Math.sin(a) * rad;
+  });
+}
+
+function relax(nodes, links, steps) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const cell = nodes.length > 400 ? 92 : 70;
+  for (let s = 0; s < steps; s++) {
+    const cool = 1 - s / steps;
+    const grid = new Map();
+    nodes.forEach((n) => {
+      const key = `${Math.floor(n.x / cell)},${Math.floor(n.y / cell)}`;
+      const bucket = grid.get(key);
+      if (bucket) bucket.push(n);
+      else grid.set(key, [n]);
+    });
+    nodes.forEach((n) => {
+      const cx = Math.floor(n.x / cell);
+      const cy = Math.floor(n.y / cell);
+      for (let ix = cx - 1; ix <= cx + 1; ix++) {
+        for (let iy = cy - 1; iy <= cy + 1; iy++) {
+          const bucket = grid.get(`${ix},${iy}`);
+          if (!bucket) continue;
+          bucket.forEach((m) => {
+            if (m.id <= n.id) return;
+            let dx = n.x - m.x;
+            let dy = n.y - m.y;
+            let dist = Math.hypot(dx, dy) || 0.01;
+            let force = Math.min(7, (160 * cool) / (dist * dist));
+            dx /= dist; dy /= dist;
+            n.x += dx * force; n.y += dy * force;
+            m.x -= dx * force; m.y -= dy * force;
+          });
+        }
+      }
+    });
+    links.forEach((l) => {
+      const a = byId.get(l.from);
+      const b = byId.get(l.to);
+      if (!a || !b) return;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const ideal = nodes.length > 400 ? 58 : 92;
+      const mag = (dist - ideal) * 0.045 * cool;
+      dx /= dist; dy /= dist;
+      a.x += dx * mag; a.y += dy * mag;
+      b.x -= dx * mag; b.y -= dy * mag;
+    });
+    nodes.forEach((n) => {
+      n.x += -n.x * 0.015 * cool;
+      n.y += -n.y * 0.015 * cool;
+    });
+  }
+}
+
+function fit(nodes) {
+  if (!nodes.length) return;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  nodes.forEach((n) => {
+    minX = Math.min(minX, n.x);
+    maxX = Math.max(maxX, n.x);
+    minY = Math.min(minY, n.y);
+    maxY = Math.max(maxY, n.y);
+  });
+  const { w, h } = viewSize();
+  if (w < 40 || h < 40) return;
+  const pad = 72;
+  const bw = Math.max(80, maxX - minX);
+  const bh = Math.max(80, maxY - minY);
+  const k = Math.max(0.28, Math.min(1.7, Math.min((w - pad * 2) / bw, (h - pad * 2) / bh)));
+  state.cam.k = k;
+  state.cam.x = -((minX + maxX) / 2);
+  state.cam.y = -((minY + maxY) / 2);
 }
 
 function currentModel() {
-  if (state.mode === "mutual") return mutualModel();
-  if (state.mode === "all") return allModel();
-  return egoModel();
+  const key = state.mode === "all" ? "all" : `local:${state.focus}:${state.depth}`;
+  if (state.model && state.layoutKey === key) return state.model;
+  state.model = state.mode === "all" ? globalModel() : localModel();
+  state.model.nodes.forEach(colorFor);
+  state.layoutKey = key;
+  fit(state.model.nodes);
+  renderLegend(state.model.nodes);
+  return state.model;
+}
+
+function renderLegend(nodes) {
+  const counts = new Map();
+  nodes.forEach((n) => {
+    const label = n.listed ? (n.sector || "未設定") : (KIND_LABEL[n.kind] || "その他");
+    counts.set(label, (counts.get(label) || 0) + 1);
+  });
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  document.querySelector("#legend").innerHTML = top.map(([label]) => {
+    const swatch = state.sectorColor.get(label) || KIND_COLOR[Object.keys(KIND_LABEL).find((k) => KIND_LABEL[k] === label)] || "#d5dde6";
+    return `<span><i class="swatch" style="background:${swatch}"></i>${escapeHtml(label)}</span>`;
+  }).join("");
+}
+
+function queryText() {
+  return q.value.trim().toLowerCase().replace(/\s/g, "");
+}
+
+function nodeMatches(n, text) {
+  if (!text) return false;
+  return `${n.code || ""}${n.name || ""}`.toLowerCase().replace(/\s/g, "").includes(text);
+}
+
+function radiusOf(n) {
+  const base = state.mode === "all" ? 1.7 + Math.sqrt(n.deg || 1) * 0.85 : 5 + Math.sqrt(n.deg || 1) * 0.7;
+  return n.id === state.focus ? base + 2.4 : base;
 }
 
 function draw() {
   if (!state.data) return;
   const { w, h } = viewSize();
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#e4ebf0";
+  ctx.fillStyle = "#16181d";
   ctx.fillRect(0, 0, w, h);
   const model = currentModel();
-  state.model = model;
   document.querySelector("#graph-note").textContent = model.note;
-  const showLabel = (n) => {
-    if (state.mode !== "all") return true;
-    return n.pr >= 0.005 || n.id === state.hover || n.id === state.focus;
-  };
-  ctx.lineWidth = 1;
-  ctx.font = "13px Zen Kaku Gothic New, sans-serif";
+  const text = queryText();
+  const hitId = state.hover;
+  const hot = new Set();
+  if (hitId) {
+    hot.add(hitId);
+    model.links.forEach((l) => {
+      if (l.from === hitId) hot.add(l.to);
+      if (l.to === hitId) hot.add(l.from);
+    });
+  }
+  const byNode = new Map(model.nodes.map((n) => [n.id, n]));
   model.links.forEach((l) => {
-    const a = model.nodes.find((n) => n.id === l.from);
-    const b = model.nodes.find((n) => n.id === l.to);
+    const a = byNode.get(l.from);
+    const b = byNode.get(l.to);
     if (!a || !b) return;
+    const linked = !hitId || hot.has(a.id) || hot.has(b.id);
+    const matched = !text || nodeMatches(a, text) || nodeMatches(b, text);
     const [x1, y1] = toScreen(a.x, a.y);
     const [x2, y2] = toScreen(b.x, b.y);
-    ctx.strokeStyle = "rgba(23,38,44,0.28)";
+    const width = l.mutual ? 1.35 : Math.min(2.2, 0.35 + (l.r || 0) / 28);
+    ctx.strokeStyle = l.mutual ? "rgba(232,196,122,0.85)" : "rgba(214,222,232,0.28)";
+    ctx.globalAlpha = linked && matched ? 1 : 0.08;
+    ctx.lineWidth = width;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
-    if (state.mode !== "all" && l.r >= 3) {
-      const center = model.nodes.find((n) => n.role === "center") || model.nodes[0];
-      const nearStart = l.from === center.id;
-      const t = nearStart ? 0.22 : 0.78;
-      ctx.fillStyle = "#4e646e";
-      ctx.fillText(`${l.r.toFixed(1)}%`, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
-    }
   });
+  ctx.globalAlpha = 1;
   model.nodes.forEach((n) => {
     const [x, y] = toScreen(n.x, n.y);
-    const hot = n.id === state.hover || n.id === state.focus;
-    const radius = n.role === "center" ? 16 : state.mode === "all" ? (n.pr > 0.006 ? 6 : 3) : 7;
+    const active = !hitId || hot.has(n.id);
+    const matched = !text || nodeMatches(n, text);
+    const r = radiusOf(n) * (state.mode === "all" ? 1 : 1);
+    ctx.globalAlpha = active && matched ? 0.95 : 0.12;
     ctx.beginPath();
-    ctx.fillStyle = n.role === "center" ? "#17262c" : (KIND_COLOR[n.kind] || "#0c5552");
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = colorFor(n);
+    ctx.arc(x, y, Math.max(1.6, r), 0, Math.PI * 2);
     ctx.fill();
-    if (hot && n.role !== "center") {
-      ctx.strokeStyle = "#17262c";
+    if (n.id === state.focus || n.id === hitId) {
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "#f4f7fb";
       ctx.stroke();
     }
-    if (showLabel(n)) {
-      ctx.fillStyle = "#17262c";
-      ctx.font = n.role === "center" ? "700 16px Zen Kaku Gothic New, sans-serif" : "500 12px Zen Kaku Gothic New, sans-serif";
-      const label = n.role === "center" ? n.name : shorten(n.name);
-      if (state.mode === "mutual") {
-        ctx.textAlign = "center";
-        ctx.fillText(label, x, y - 12);
-        ctx.textAlign = "left";
-      } else {
-        const dx = n.x < -20 ? -ctx.measureText(label).width - 12 : 12;
-        ctx.fillText(label, x + (n.role === "center" ? -ctx.measureText(label).width / 2 : dx), y + (n.role === "center" ? 32 : 4));
-      }
+    const hub = state.mode === "all" ? 16 : 1;
+    const show = n.id === hitId || n.id === state.focus || (state.cam.k > 1.45 && (n.deg || 0) >= 3) || (n.deg || 0) >= hub;
+    if (show && active && matched) {
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = "#eef2f6";
+      ctx.font = n.id === state.focus ? "600 13px Zen Kaku Gothic New, sans-serif" : "500 12px Zen Kaku Gothic New, sans-serif";
+      ctx.fillText(shorten(n.name), x + r + 4, y + 4);
     }
   });
+  ctx.globalAlpha = 1;
 }
 
 function shorten(name) {
-  const s = String(name).replace(/株式会社|（株）|\(株\)/g, "");
-  return s.length > 14 ? `${s.slice(0, 14)}…` : s;
+  const s = String(name || "").replace(/株式会社|（株）|\(株\)/g, "").trim();
+  return s.length > 16 ? `${s.slice(0, 16)}…` : s;
 }
 
 function hit(px, py) {
   if (!state.model) return null;
   let best = null;
-  let bestD = 18;
+  let bestD = Infinity;
   state.model.nodes.forEach((n) => {
     const [x, y] = toScreen(n.x, n.y);
     const d = Math.hypot(x - px, y - py);
-    if (d < bestD) {
+    const reach = radiusOf(n) + 8;
+    if (d <= reach && d < bestD) {
       best = n;
       bestD = d;
     }
@@ -410,10 +616,17 @@ function hit(px, py) {
 canvas.addEventListener("mousemove", (ev) => {
   const r = canvas.getBoundingClientRect();
   const n = hit(ev.clientX - r.left, ev.clientY - r.top);
+  if (state.dragNode) {
+    if (Math.hypot(ev.movementX, ev.movementY) > 2) state.moved = true;
+    state.dragNode.x += ev.movementX / state.cam.k;
+    state.dragNode.y += ev.movementY / state.cam.k;
+    draw();
+    return;
+  }
   const id = n ? n.id : null;
   if (id !== state.hover) {
     state.hover = id;
-    canvas.style.cursor = n && (n.code || n.role === "center") ? "pointer" : "grab";
+    canvas.style.cursor = n ? "pointer" : (state.drag ? "grabbing" : "grab");
     draw();
   }
   if (state.drag) {
@@ -422,18 +635,34 @@ canvas.addEventListener("mousemove", (ev) => {
     draw();
   }
 });
-canvas.addEventListener("mousedown", () => { state.drag = true; });
-window.addEventListener("mouseup", () => { state.drag = false; });
-canvas.addEventListener("click", (ev) => {
+canvas.addEventListener("mousedown", (ev) => {
   const r = canvas.getBoundingClientRect();
   const n = hit(ev.clientX - r.left, ev.clientY - r.top);
-  const code = n && (n.code || n.id);
+  state.moved = false;
+  if (n) state.dragNode = n;
+  else state.drag = true;
+});
+window.addEventListener("mouseup", () => { state.drag = false; state.dragNode = null; });
+canvas.addEventListener("click", (ev) => {
+  if (state.moved) return;
+  const r = canvas.getBoundingClientRect();
+  const n = hit(ev.clientX - r.left, ev.clientY - r.top);
+  const code = n && n.code;
   if (code && state.by.has(code)) select(code);
 });
 canvas.addEventListener("wheel", (ev) => {
   ev.preventDefault();
-  const next = state.cam.k * (ev.deltaY > 0 ? 0.92 : 1.08);
-  state.cam.k = Math.max(0.45, Math.min(2.6, next));
+  const rect = canvas.getBoundingClientRect();
+  const { w, h } = viewSize();
+  const mx = ev.clientX - rect.left - w / 2;
+  const my = ev.clientY - rect.top - h / 2;
+  const prev = state.cam.k;
+  const next = Math.max(0.28, Math.min(3.4, prev * (ev.deltaY > 0 ? 0.9 : 1.11)));
+  const worldX = mx / prev - state.cam.x;
+  const worldY = my / prev - state.cam.y;
+  state.cam.k = next;
+  state.cam.x = mx / next - worldX;
+  state.cam.y = my / next - worldY;
   draw();
 }, { passive: false });
 
@@ -443,14 +672,21 @@ async function boot() {
   const res = await fetch("data/graph.json");
   state.data = await res.json();
   state.data.companies.forEach((c) => state.by.set(c.code, c));
+  state.data.edges.forEach((e) => {
+    if (!state.adj.has(e.h)) state.adj.set(e.h, []);
+    if (!state.adj.has(e.i)) state.adj.set(e.i, []);
+    state.adj.get(e.h).push({ other: e.i, r: e.r });
+    state.adj.get(e.i).push({ other: e.h, r: e.r });
+  });
   const withHolders = state.data.companies.filter((c) => c.holders.length).length;
   document.querySelector("#lede").textContent =
     `${state.data.source}。大株主表があるのは ${withHolders.toLocaleString("ja-JP")} 社、上場会社どうしの出資は ${state.data.edges.length.toLocaleString("ja-JP")} 本です。`;
   document.querySelector("#foot").textContent =
-    "投資助言ではありません。表の罫線が落ちたテキストから復元しているため、株数と比率の境界を誤ることがあります。検証は有報の原文に戻してください。全体図の配置計算に使った中心性は Colab の A100 で求めています。";
+    "投資助言ではありません。表の罫線が落ちたテキストから復元しているため、株数と比率の境界を誤ることがあります。検証は有報の原文に戻してください。初期配置の種は、業種の並びと出資関係から置いています。";
   renderLists();
   if (!state.by.has(state.focus)) state.focus = state.data.companies.find((c) => c.holders.length).code;
-  select(state.focus);
+  renderDetail();
+  document.querySelector("#depth").hidden = true;
   resize();
 }
 

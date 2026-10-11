@@ -23,9 +23,8 @@
   </header>
 
   <div class="modes" role="tablist">
-    <button type="button" class="mode" data-mode="ego" aria-selected="true">この銘柄</button>
-    <button type="button" class="mode" data-mode="mutual" aria-selected="false">相互持合い</button>
-    <button type="button" class="mode" data-mode="all" aria-selected="false">全体</button>
+    <button type="button" class="mode" data-mode="all" aria-selected="true">全体</button>
+    <button type="button" class="mode" data-mode="local" aria-selected="false">この銘柄</button>
   </div>
 
   <main>
@@ -46,13 +45,13 @@
 
     <section class="stage" aria-label="株主グラフ">
       <canvas id="graph"></canvas>
-      <p id="graph-note" class="note"></p>
-      <div class="legend" aria-hidden="true">
-        <span><i class="swatch corp"></i>事業会社</span>
-        <span><i class="swatch inst"></i>機関</span>
-        <span><i class="swatch stable"></i>個人・持株会・保険</span>
-        <span><i class="swatch broker"></i>証券</span>
+      <div class="depth" id="depth" hidden>
+        <span>深さ</span>
+        <button type="button" data-depth="1" aria-pressed="true">1</button>
+        <button type="button" data-depth="2" aria-pressed="false">2</button>
       </div>
+      <p id="graph-note" class="note"></p>
+      <div class="legend" id="legend"></div>
     </section>
 
     <aside class="detail" id="detail" aria-live="polite">
