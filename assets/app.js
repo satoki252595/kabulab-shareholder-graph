@@ -373,11 +373,10 @@ function localModel() {
     }
   });
   seedCircle(nodes);
-  relax(nodes, links, nodes.length > 40 ? 90 : 140);
   const depthLabel = state.depth === 1 ? "隣だけ" : "隣とその先";
   return {
     nodes, links,
-    note: `${c.name} の周辺です。${depthLabel}を出しています。点を押すと、その銘柄のノートに移ります。`,
+    note: `${c.name} の周辺です。${depthLabel}。点をつかむと、つながった名前がついてきます。`,
   };
 }
 
@@ -397,17 +396,16 @@ function globalModel() {
   const links = state.data.edges.map((e) => ({
     from: e.h, to: e.i, r: e.r, mutual: mutual.has([e.h, e.i].sort().join("|")),
   }));
-  relax(nodes, links, 48);
   return {
     nodes, links,
-    note: "出資のある会社だけを、リンクで引き合う配置にしています。点の大きさはつながりの数、色は業種です。点を押すと、その銘柄の周辺に移ります。",
+    note: "出資でつながった会社です。近い点ほど、あいだに持ち合いがあります。",
   };
 }
 
 function seedCircle(nodes) {
   const center = nodes.find((n) => n.role === "center") || nodes[0];
   nodes.forEach((n, i) => {
-    if (n === center) { n.x = 0; n.y = 0; return; }
+    if (n === center) { n.x = 0; n.y = 0; n.pinned = true; return; }
     const a = (-Math.PI / 2) + (i / nodes.length) * Math.PI * 2;
     const rad = 150 + (i % 5) * 18;
     n.x = Math.cos(a) * rad;
@@ -415,11 +413,13 @@ function seedCircle(nodes) {
   });
 }
 
-function relax(nodes, links, steps) {
+function relax(nodes, links, steps, fixedAlpha) {
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const cell = nodes.length > 400 ? 92 : 70;
+  const big = nodes.length > 400;
+  const cell = big ? 56 : 86;
+  const ideal = big ? 34 : 156;
   for (let s = 0; s < steps; s++) {
-    const cool = 1 - s / steps;
+    const cool = fixedAlpha === undefined ? 1 - s / Math.max(steps, 1) : fixedAlpha;
     const grid = new Map();
     nodes.forEach((n) => {
       const key = `${Math.floor(n.x / cell)},${Math.floor(n.y / cell)}`;
@@ -439,10 +439,10 @@ function relax(nodes, links, steps) {
             let dx = n.x - m.x;
             let dy = n.y - m.y;
             let dist = Math.hypot(dx, dy) || 0.01;
-            let force = Math.min(7, (160 * cool) / (dist * dist));
+            const force = Math.min(big ? 4 : 11, ((big ? 90 : 320) * cool) / (dist * dist));
             dx /= dist; dy /= dist;
-            n.x += dx * force; n.y += dy * force;
-            m.x -= dx * force; m.y -= dy * force;
+            if (!n.pinned) { n.x += dx * force; n.y += dy * force; }
+            if (!m.pinned) { m.x -= dx * force; m.y -= dy * force; }
           });
         }
       }
@@ -454,17 +454,39 @@ function relax(nodes, links, steps) {
       let dx = b.x - a.x;
       let dy = b.y - a.y;
       const dist = Math.hypot(dx, dy) || 0.01;
-      const ideal = nodes.length > 400 ? 58 : 92;
-      const mag = (dist - ideal) * 0.045 * cool;
+      const mag = (dist - ideal) * (big ? 0.08 : 0.06) * Math.max(cool, 0.15);
       dx /= dist; dy /= dist;
-      a.x += dx * mag; a.y += dy * mag;
-      b.x -= dx * mag; b.y -= dy * mag;
+      if (!a.pinned) { a.x += dx * mag; a.y += dy * mag; }
+      if (!b.pinned) { b.x -= dx * mag; b.y -= dy * mag; }
     });
     nodes.forEach((n) => {
-      n.x += -n.x * 0.015 * cool;
-      n.y += -n.y * 0.015 * cool;
+      if (n.pinned) { n.x = 0; n.y = 0; return; }
+      n.x += -n.x * 0.012 * cool;
+      n.y += -n.y * 0.012 * cool;
     });
   }
+}
+
+function heat(alpha) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  state.alpha = Math.max(state.alpha || 0, alpha);
+  if (state.loop) return;
+  state.loop = true;
+  const frame = () => {
+    const model = state.model;
+    if (!model || state.alpha < 0.02) {
+      state.loop = false;
+      state.alpha = 0;
+      if (model) fit(model.nodes);
+      draw();
+      return;
+    }
+    relax(model.nodes, model.links, 1, state.alpha);
+    state.alpha *= 0.975;
+    draw();
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 
 function fit(nodes) {
@@ -494,24 +516,33 @@ function currentModel() {
   const key = state.mode === "all" ? "all" : `local:${state.focus}:${state.depth}`;
   if (state.model && state.layoutKey === key) return state.model;
   state.model = state.mode === "all" ? globalModel() : localModel();
-  state.model.nodes.forEach(colorFor);
+  state.model.nodes.forEach((n) => { n.fill = nodeFill(n); });
   state.layoutKey = key;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) relax(state.model.nodes, state.model.links, state.mode === "all" ? 24 : 70);
   fit(state.model.nodes);
-  renderLegend(state.model.nodes);
+  renderLegend();
+  if (!reduce) heat(1);
   return state.model;
 }
 
-function renderLegend(nodes) {
-  const counts = new Map();
-  nodes.forEach((n) => {
-    const label = n.listed ? (n.sector || "未設定") : (KIND_LABEL[n.kind] || "その他");
-    counts.set(label, (counts.get(label) || 0) + 1);
-  });
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-  document.querySelector("#legend").innerHTML = top.map(([label]) => {
-    const swatch = state.sectorColor.get(label) || KIND_COLOR[Object.keys(KIND_LABEL).find((k) => KIND_LABEL[k] === label)] || "#d5dde6";
-    return `<span><i class="swatch" style="background:${swatch}"></i>${escapeHtml(label)}</span>`;
-  }).join("");
+function nodeFill(n) {
+  if (n.role === "center" || n.id === state.focus) return "#c4b5fd";
+  if (!n.listed) {
+    if (n.kind === "inst" || n.kind === "foreign") return "#93c5fd";
+    if (n.kind === "person" || n.kind === "employee" || n.kind === "insurer") return "#f5d48a";
+    return "#e4e4e7";
+  }
+  return "#d4d4d8";
+}
+
+function renderLegend() {
+  document.querySelector("#legend").innerHTML = [
+    ["#c4b5fd", "開いている銘柄"],
+    ["#d4d4d8", "上場会社"],
+    ["#93c5fd", "機関"],
+    ["#f5d48a", "個人・持株会・保険"],
+  ].map(([color, label]) => `<span><i class="swatch" style="background:${color}"></i>${label}</span>`).join("");
 }
 
 function queryText() {
@@ -532,7 +563,7 @@ function draw() {
   if (!state.data) return;
   const { w, h } = viewSize();
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#16181d";
+  ctx.fillStyle = "#1e1e1e";
   ctx.fillRect(0, 0, w, h);
   const model = currentModel();
   document.querySelector("#graph-note").textContent = model.note;
@@ -551,42 +582,41 @@ function draw() {
     const a = byNode.get(l.from);
     const b = byNode.get(l.to);
     if (!a || !b) return;
-    const linked = !hitId || hot.has(a.id) || hot.has(b.id);
+    const on = !hitId || hot.has(a.id) || hot.has(b.id);
     const matched = !text || nodeMatches(a, text) || nodeMatches(b, text);
     const [x1, y1] = toScreen(a.x, a.y);
     const [x2, y2] = toScreen(b.x, b.y);
-    const width = l.mutual ? 1.35 : Math.min(2.2, 0.35 + (l.r || 0) / 28);
-    ctx.strokeStyle = l.mutual ? "rgba(232,196,122,0.85)" : "rgba(214,222,232,0.28)";
-    ctx.globalAlpha = linked && matched ? 1 : 0.08;
-    ctx.lineWidth = width;
+    ctx.strokeStyle = hitId && on ? "#c4b5fd" : "#8a8a8a";
+    ctx.globalAlpha = on && matched ? (hitId ? 0.85 : 0.38) : 0.045;
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
     ctx.stroke();
   });
   ctx.globalAlpha = 1;
+  const labelAll = state.mode !== "all" && model.nodes.length <= 36;
   model.nodes.forEach((n) => {
     const [x, y] = toScreen(n.x, n.y);
     const active = !hitId || hot.has(n.id);
     const matched = !text || nodeMatches(n, text);
-    const r = radiusOf(n) * (state.mode === "all" ? 1 : 1);
-    ctx.globalAlpha = active && matched ? 0.95 : 0.12;
+    const r = Math.max(state.mode === "all" ? 1.8 : 3.5, radiusOf(n));
+    ctx.globalAlpha = active && matched ? 1 : 0.08;
     ctx.beginPath();
-    ctx.fillStyle = colorFor(n);
-    ctx.arc(x, y, Math.max(1.6, r), 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = n.id === state.focus ? "#c4b5fd" : (n.fill || nodeFill(n));
     if (n.id === state.focus || n.id === hitId) {
-      ctx.lineWidth = 1.4;
-      ctx.strokeStyle = "#f4f7fb";
-      ctx.stroke();
+      ctx.shadowColor = n.id === state.focus ? "#c4b5fd" : "#ffffff";
+      ctx.shadowBlur = 14;
     }
-    const hub = state.mode === "all" ? 16 : 1;
-    const show = n.id === hitId || n.id === state.focus || (state.cam.k > 1.45 && (n.deg || 0) >= 3) || (n.deg || 0) >= hub;
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    const show = labelAll || n.id === hitId || n.id === state.focus || (hitId && hot.has(n.id) && state.mode !== "all");
     if (show && active && matched) {
       ctx.globalAlpha = 0.92;
-      ctx.fillStyle = "#eef2f6";
-      ctx.font = n.id === state.focus ? "600 13px Zen Kaku Gothic New, sans-serif" : "500 12px Zen Kaku Gothic New, sans-serif";
-      ctx.fillText(shorten(n.name), x + r + 4, y + 4);
+      ctx.fillStyle = "#ececec";
+      ctx.font = "500 12px Zen Kaku Gothic New, sans-serif";
+      ctx.fillText(shorten(n.name), x + r + 5, y + 4);
     }
   });
   ctx.globalAlpha = 1;
@@ -618,9 +648,14 @@ canvas.addEventListener("mousemove", (ev) => {
   const n = hit(ev.clientX - r.left, ev.clientY - r.top);
   if (state.dragNode) {
     if (Math.hypot(ev.movementX, ev.movementY) > 2) state.moved = true;
+    if (state.dragNode.role !== "center") state.dragNode.pinned = false;
     state.dragNode.x += ev.movementX / state.cam.k;
     state.dragNode.y += ev.movementY / state.cam.k;
-    draw();
+    if (state.dragNode.role === "center") {
+      state.dragNode.x = 0;
+      state.dragNode.y = 0;
+    }
+    heat(0.42);
     return;
   }
   const id = n ? n.id : null;
