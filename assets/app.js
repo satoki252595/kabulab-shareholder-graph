@@ -27,8 +27,9 @@ const state = {
   data: null,
   by: new Map(),
   adj: new Map(),
-  mode: "all",
+  mode: "local",
   depth: 1,
+  minRatio: 5,
   focus: "9435",
   hover: null,
   suggest: 0,
@@ -65,13 +66,18 @@ function resize() {
   canvas.width = Math.max(1, Math.floor(r.width * dpr));
   canvas.height = Math.max(1, Math.floor(r.height * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (state.model && state.model.layout === "stake") fit(state.model.nodes);
   draw();
 }
 
 function holdingsOf(code) {
-  return state.data.edges
-    .filter((e) => e.h === code)
-    .sort((a, b) => b.r - a.r);
+  const best = new Map();
+  state.data.edges.forEach((e) => {
+    if (e.h !== code) return;
+    const prev = best.get(e.i);
+    if (!prev || e.r > prev.r) best.set(e.i, e);
+  });
+  return [...best.values()].sort((a, b) => b.r - a.r);
 }
 
 function holdersListed(code) {
@@ -82,6 +88,34 @@ function holdersListed(code) {
 
 function company(code) {
   return state.by.get(code);
+}
+
+function stripCo(s) {
+  return String(s || "").replace(/株式会社|有限会社|合同会社|（株）|\(株\)/g, "").replace(/\s/g, "");
+}
+
+function sameParty(holder, focus) {
+  if (!focus) return false;
+  if (holder.code && holder.code === focus.code) return true;
+  const a = stripCo(holder.name);
+  const b = stripCo(focus.name);
+  return a.length >= 2 && b.length >= 2 && (a.includes(b) || b.includes(a));
+}
+
+function holderLabel(h, all) {
+  const peers = (all || []).filter((x) => h.code && x.code === h.code);
+  if (peers.length > 1) return h.name;
+  if (h.code && state.by.has(h.code)) {
+    const n = company(h.code).name;
+    if (n && n !== h.code) return n;
+  }
+  return h.name;
+}
+
+function displayName(code) {
+  const n = company(code);
+  if (n && n.name && n.name !== n.code) return n.name;
+  return "社名未収録";
 }
 
 function select(code) {
@@ -101,17 +135,18 @@ function select(code) {
 }
 
 function renderLists() {
-  const hubs = [...state.data.companies]
-    .filter((c) => c.outDeg > 0 && c.name !== c.code)
-    .sort((a, b) => b.outDeg - a.outDeg || b.pr - a.pr)
+  const hubs = state.data.companies
+    .map((c) => ({ c, n: holdingsOf(c.code).length }))
+    .filter(({ c, n }) => n > 0 && c.name !== c.code)
+    .sort((a, b) => b.n - a.n || b.c.pr - a.c.pr)
     .slice(0, 12);
-  document.querySelector("#hubs").innerHTML = hubs.map((c) => row(c, c.outDeg ? `${c.outDeg}社` : "")).join("");
+  document.querySelector("#hubs").innerHTML = hubs.map(({ c, n }) => row(c, `${n}社`)).join("");
 
   const drops = state.data.companies
     .filter((c) => c.listedDelta !== null && c.listedDelta <= -5 && (c.listed || 0) >= 8 && c.holders.length)
     .sort((a, b) => a.listedDelta - b.listedDelta)
     .slice(0, 12);
-  document.querySelector("#drops").innerHTML = drops.map((c) => row(c, signed(c.listedDelta))).join("");
+  document.querySelector("#drops").innerHTML = drops.map((c) => row(c, signed(c.listedDelta), "down")).join("");
 
   const pairs = state.data.mutual
     .map(([a, b]) => {
@@ -133,8 +168,9 @@ function renderLists() {
   });
 }
 
-function row(c, extra) {
-  return `<li><button type="button" data-code="${c.code}"><span class="code">${c.code}</span><span class="name">${escapeHtml(c.name)}</span><span class="num">${extra}</span></button></li>`;
+function row(c, extra, tone) {
+  const cls = tone ? ` class="num ${tone}"` : ` class="num"`;
+  return `<li><button type="button" data-code="${c.code}"><span class="code">${c.code}</span><span class="name">${escapeHtml(c.name)}</span><span${cls}>${extra}</span></button></li>`;
 }
 
 function escapeHtml(s) {
@@ -148,53 +184,102 @@ function renderDetail() {
     box.innerHTML = `<p class="quiet">銘柄を選ぶと、大株主と保有先が出ます。</p>`;
     return;
   }
-  const owns = holdingsOf(c.code).slice(0, 12);
-  const holderRows = (c.holders || []).map((h) => {
-    const click = h.code ? ` class="link" data-code="${h.code}"` : "";
-    return `<tr${click}><td>${escapeHtml(h.name)}</td><td>${KIND_LABEL[h.kind] || ""}</td><td class="r">${pct(h.ratio)}</td></tr>`;
-  }).join("");
-  const ownRows = owns.map((e) => {
-    const n = company(e.i);
-    const label = n.name && n.name !== n.code ? n.name : "社名未収録";
-    return `<tr class="link" data-code="${e.i}"><td>${e.i} ${escapeHtml(label)}</td><td class="r">${pct(e.r)}</td></tr>`;
-  }).join("");
-  const meters = [
-    ["安定", c.stable, "stable"],
-    ["機関", c.inst, "inst"],
-    ["事業会社", c.listed, "corp"],
-  ].map(([label, value, cls]) => {
-    const w = Math.max(0, Math.min(100, value || 0));
-    return `<div><span>${label}</span><div class="bar ${cls}"><span style="width:${w}%"></span></div><b>${pct(value)}</b></div>`;
-  }).join("");
-  const delta = c.listedDelta === null ? "" : `<p class="delta ${c.listedDelta < 0 ? "down" : ""}">上場事業会社の比率 ${signed(c.listedDelta)}（${c.prior || "前期"} → ${c.period || "直近"}）</p>`;
-  const missing = c.holders.length ? "" : `<p class="quiet">この銘柄自身の大株主表は、今回の抽出では取れていません。他社の大株主欄に出てきた持分だけを示します。</p>`;
+  const owns = holdingsOf(c.code);
+  const holderRows = (c.holders || []).map((h) => line(holderLabel(h, c.holders), KIND_LABEL[h.kind] || "", h.ratio, h.code, h.kind)).join("");
+  const ownRows = owns.map((e) => line(displayName(e.i), e.i, e.r, e.i, "out")).join("");
+  const delta = c.listedDelta === null || Math.abs(c.listedDelta) < 0.5 ? "" : `<p class="delta ${c.listedDelta < 0 ? "down" : ""}">上場の事業会社が持つ比率は前期比 ${signed(c.listedDelta)} です（${c.prior || "前期"}から${c.period || "直近"}）。</p>`;
+  const ownTitle = owns.length ? `この会社が持っている上場株　${owns.length}社` : "この会社が持っている上場株";
   box.innerHTML = `
     <p class="who"><span class="code">${c.code}</span></p>
     <h2>${escapeHtml(c.name)}</h2>
-    <p class="meta">${escapeHtml(c.sector || "業種未設定")}${c.period ? ` · 期末 ${c.period}` : ""}</p>
-    ${c.holders.length ? `<div class="meters">${meters}</div><p class="quiet">この3つは、この銘柄の大株主上位10名の内訳です。</p>${delta}` : missing}
-    <h2>大株主</h2>
-    ${holderRows ? `<table><thead><tr><th>名前</th><th>区分</th><th class="r">比率</th></tr></thead><tbody>${holderRows}</tbody></table>` : `<p class="quiet">表なし</p>`}
-    <h2>この会社が持っている上場株</h2>
-    ${ownRows ? `<table><thead><tr><th>銘柄</th><th class="r">比率</th></tr></thead><tbody>${ownRows}</tbody></table>` : `<p class="quiet">名寄せできた保有先はありません。</p>`}
+    <p class="meta">${escapeHtml(c.sector || "業種未設定")}${c.period ? `　期末 ${c.period}` : ""}</p>
+    <p class="reading">${escapeHtml(reading(c))}</p>
+    ${mixBar(c)}
+    ${delta}
+    <h2 class="block">誰がこの株を持っているか</h2>
+    ${holderRows || `<p class="quiet">大株主の表は取れていません。他社の有報に出てきた分だけを、下とグラフに出します。</p>`}
+    <h2 class="block">${escapeHtml(ownTitle)}</h2>
+    ${ownRows || `<p class="quiet">名の一致した保有先はありません。</p>`}
   `;
 }
 
+function reading(c) {
+  const top = (c.holders || [])[0];
+  if (!top) return "この銘柄自身の大株主表は取れていません。他社の大株主欄に出てきた持分だけを示します。";
+  const instBit = (c.inst || 0) < 0.5
+    ? "機関はほぼいません"
+    : c.instDelta === null || Math.abs(c.instDelta) < 0.15
+      ? `機関は ${pct(c.inst)}`
+      : `機関は ${pct(c.inst)}（前期比 ${signed(c.instDelta)}）`;
+  const listedHolder = (c.holders || []).filter((h) => h.code).sort((a, b) => b.ratio - a.ratio)[0];
+  let tail;
+  if (top.code) tail = "筆頭自体が上場会社です。";
+  else if (listedHolder && listedHolder.ratio >= 10) tail = `上場会社では ${holderLabel(listedHolder, c.holders)} が ${pct(listedHolder.ratio)} です。`;
+  else tail = "上位10名に、大きな上場の事業会社はほぼいません。";
+  const bookN = holdingsOf(c.code).length;
+  const book = bookN ? `この会社は上場株を ${bookN} 社持っています。` : "";
+  return `筆頭は ${holderLabel(top, c.holders)} で ${pct(top.ratio)}。${instBit}。${tail}${book}`;
+}
+
+function mixBar(c) {
+  if (!(c.holders || []).length) return "";
+  const parts = [
+    ["inst", c.inst || 0, "機関"],
+    ["people", (c.person || 0) + (c.employee || 0), "個人・持株会"],
+    ["insurer", c.insurer || 0, "保険"],
+    ["corp", c.corp || 0, "事業会社"],
+  ];
+  const sum = parts.reduce((s, p) => s + Math.max(0, p[1]), 0);
+  const scale = sum > 100 ? 100 / sum : 1;
+  const bar = parts.map(([k, v]) => `<span class="${k}" style="width:${Math.max(0, v) * scale}%"></span>`).join("");
+  const legend = parts.filter(([, v]) => v >= 0.5).map(([k, v, label]) => {
+    let extra = "";
+    if (k === "corp" && (c.listed || 0) < 1) extra = "（上場はほぼなし）";
+    else if (k === "corp" && c.listed) extra = `（うち上場 ${pct(c.listed)}）`;
+    return `<span>${label} <b>${pct(v)}</b>${extra}</span>`;
+  }).join("");
+  const covered = c.top10 || 0;
+  const rest = Math.max(0, 100 - covered);
+  const restNote = rest >= 1
+    ? `上位10名で ${pct(covered)}。残りの ${pct(rest)} はこの表の外です。`
+    : `上位10名で ${pct(covered)}。`;
+  return `<div class="mix" aria-hidden="true">${bar}</div><p class="mix-legend">${legend}</p><p class="quiet">${restNote}</p>`;
+}
+
+function line(name, kind, ratio, code, tone) {
+  const w = Math.max(0, Math.min(100, ratio || 0));
+  const toneClass = tone === "inst" || tone === "foreign" ? "inst"
+    : tone === "person" || tone === "employee" || tone === "insurer" ? "people"
+      : tone === "out" ? "out" : "corp";
+  const tag = code ? "button" : "div";
+  const type = code ? ` type="button"` : "";
+  const cls = code ? "line link" : "line";
+  const data = code ? ` data-code="${code}"` : "";
+  return `<${tag}${type} class="${cls}"${data}><span class="nm">${escapeHtml(name)}</span><b>${pct(ratio)}</b><span class="sub">${escapeHtml(kind)}</span><span class="track ${toneClass}"><span style="width:${w}%"></span></span></${tag}>`;
+}
+
 document.querySelector("#detail").addEventListener("click", (ev) => {
-  const tr = ev.target.closest("tr[data-code]");
-  if (tr) select(tr.dataset.code);
+  const rowEl = ev.target.closest("[data-code]");
+  if (rowEl) select(rowEl.dataset.code);
 });
 
 function searchMatches(text) {
   const t = text.trim().toLowerCase().replace(/\s/g, "");
   if (!t) return [];
-  const out = [];
+  const scored = [];
   for (const c of state.data.companies) {
-    const hay = `${c.code}${c.name}`.toLowerCase().replace(/\s/g, "");
-    if (hay.includes(t)) out.push(c);
-    if (out.length >= 8) break;
+    const code = c.code.toLowerCase();
+    const name = c.name.toLowerCase().replace(/\s/g, "");
+    let score = 0;
+    if (code === t) score = 100;
+    else if (code.startsWith(t)) score = 80;
+    else if (name.startsWith(t)) score = 60;
+    else if (name.includes(t) || code.includes(t)) score = 40;
+    else continue;
+    scored.push([score, c]);
   }
-  return out;
+  scored.sort((a, b) => b[0] - a[0] || a[1].code.localeCompare(b[1].code, "ja"));
+  return scored.slice(0, 8).map((pair) => pair[1]);
 }
 
 function paintSuggest() {
@@ -255,11 +340,11 @@ document.querySelectorAll(".mode").forEach((btn) => {
     draw();
   });
 });
-document.querySelectorAll("#depth button").forEach((btn) => {
+document.querySelectorAll("#depth button[data-depth]").forEach((btn) => {
   btn.addEventListener("click", () => {
     state.depth = Number(btn.dataset.depth);
     state.layoutKey = "";
-    document.querySelectorAll("#depth button").forEach((b) => {
+    document.querySelectorAll("#depth button[data-depth]").forEach((b) => {
       b.setAttribute("aria-pressed", b === btn ? "true" : "false");
     });
     if (state.mode !== "local") {
@@ -272,6 +357,24 @@ document.querySelectorAll("#depth button").forEach((btn) => {
     draw();
   });
 });
+document.querySelector("#floor").addEventListener("click", () => {
+  state.minRatio = state.minRatio ? 0 : 5;
+  state.layoutKey = "";
+  state.mode = "local";
+  document.querySelector("#depth").hidden = false;
+  document.querySelectorAll(".mode").forEach((b) => {
+    b.setAttribute("aria-selected", b.dataset.mode === "local" ? "true" : "false");
+  });
+  syncFloor();
+  draw();
+});
+
+function syncFloor() {
+  const btn = document.querySelector("#floor");
+  const on = state.minRatio > 0;
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  btn.textContent = on ? "5%以上だけ" : "小さい持分も";
+}
 
 function viewSize() {
   const r = canvas.getBoundingClientRect();
@@ -320,64 +423,71 @@ function pushNode(nodes, seen, node) {
   nodes.push(node);
 }
 
-function localModel() {
+function stakeModel() {
   const c = company(state.focus);
   const nodes = [];
-  const seen = new Set();
-  pushNode(nodes, seen, {
-    id: c.code, code: c.code, name: c.name, sector: c.sector, listed: true,
-    kind: "corp", role: "center", deg: degree(c.code),
-  });
-  (c.holders || []).forEach((h, i) => {
-    const id = h.code || `holder:${c.code}:${i}`;
-    pushNode(nodes, seen, {
-      id, code: h.code || "", name: h.name, sector: h.code ? sectorOf(h.code) : "",
-      listed: Boolean(h.code), kind: h.kind, role: "link", deg: h.code ? degree(h.code) : 1,
-    });
-  });
-  listedNeighbors(c.code, 18).forEach((id) => {
-    const n = company(id);
-    pushNode(nodes, seen, {
-      id, code: id, name: n.name, sector: n.sector, listed: true,
-      kind: "corp", role: "link", deg: degree(id),
-    });
-  });
-  if (state.depth >= 2) {
-    const first = nodes.filter((n) => n.listed && n.id !== c.code).map((n) => n.id);
-    first.forEach((id) => {
-      listedNeighbors(id, 5).forEach((next) => {
-        if (nodes.length >= 72) return;
-        const n = company(next);
-        pushNode(nodes, seen, {
-          id: next, code: next, name: n.name, sector: n.sector, listed: true,
-          kind: "corp", role: "link", deg: degree(next),
-        });
-      });
-    });
-  }
-  const ids = new Set(nodes.map((n) => n.id));
   const links = [];
-  const pair = new Set();
-  nodes.forEach((n) => {
-    if (!n.listed) {
-      links.push({ from: n.id, to: c.code, r: ((c.holders || []).find((h) => (h.code || "") === n.code && h.name === n.name) || {}).ratio || 1 });
-      return;
-    }
-    for (const e of state.adj.get(n.id) || []) {
-      if (!ids.has(e.other)) continue;
-      const key = [n.id, e.other].sort().join("|");
-      if (pair.has(key)) continue;
-      pair.add(key);
-      const back = (state.adj.get(e.other) || []).some((x) => x.other === n.id);
-      links.push({ from: n.id, to: e.other, r: e.r, mutual: back });
-    }
+  nodes.push({
+    id: c.code, code: c.code, name: c.name, sector: c.sector, listed: true,
+    kind: "corp", role: "center", side: "center", deg: degree(c.code),
+    x: 0, y: 0, pinned: true,
   });
-  seedCircle(nodes);
-  const depthLabel = state.depth === 1 ? "隣だけ" : "隣とその先";
-  return {
-    nodes, links,
-    note: `${c.name} の周辺です。${depthLabel}。点をつかむと、つながった名前がついてきます。`,
-  };
+  const holders = (c.holders || []).filter((h) => !state.minRatio || h.ratio >= state.minRatio);
+  const owns = holdingsOf(c.code).filter((e) => !state.minRatio || e.r >= state.minRatio);
+  const gap = state.depth >= 2 ? 68 : 52;
+  const shownH = holders.slice(0, 16);
+  const shownO = owns.slice(0, state.depth >= 2 ? 12 : 16);
+  placeColumn(nodes, shownH, -340, gap, (h, i) => ({
+    id: `in:${i}:${h.code || "x"}`,
+    code: h.code || "",
+    name: holderLabel(h, c.holders),
+    sector: h.code ? sectorOf(h.code) : "",
+    listed: Boolean(h.code),
+    kind: h.kind,
+    role: "link",
+    side: "in",
+    ratio: h.ratio,
+    deg: h.code ? degree(h.code) : 1,
+  }), (node) => links.push({ from: node.id, to: c.code, r: node.ratio, dir: "in" }));
+  placeColumn(nodes, shownO, 340, gap, (e) => {
+    const node = {
+      id: `out:${e.i}`,
+      code: e.i,
+      name: displayName(e.i),
+      sector: sectorOf(e.i),
+      listed: true,
+      kind: "corp",
+      role: "link",
+      side: "out",
+      ratio: e.r,
+      deg: degree(e.i),
+    };
+    if (state.depth >= 2) {
+      const issuer = company(e.i);
+      const top = issuer && (issuer.holders || []).find((h) => !sameParty(h, c));
+      if (top) {
+        node.controller = holderLabel(top, issuer.holders);
+        node.controllerRatio = top.ratio;
+      }
+    }
+    return node;
+  }, (node) => links.push({ from: c.code, to: node.id, r: node.ratio, dir: "out" }));
+  let note = "点を押すと、その銘柄に移ります。";
+  if (state.minRatio) note += "5%未満は隠しています。";
+  if (holders.length > shownH.length || owns.length > shownO.length) note += "残りは右の一覧です。";
+  if (state.depth >= 2) note += "持ち株の下に、その筆頭を添えています。";
+  return { nodes, links, note, layout: "stake" };
+}
+
+function placeColumn(nodes, items, x, gap, make, link) {
+  const y0 = -((items.length - 1) * gap) / 2;
+  items.forEach((item, i) => {
+    const node = make(item, i);
+    node.x = x;
+    node.y = y0 + i * gap;
+    nodes.push(node);
+    link(node);
+  });
 }
 
 function globalModel() {
@@ -503,31 +613,33 @@ function fit(nodes) {
   });
   const { w, h } = viewSize();
   if (w < 40 || h < 40) return;
-  const pad = 72;
+  const padX = state.mode === "all" ? 72 : Math.max(132, Math.min(210, w * 0.22));
+  const padY = state.mode === "all" ? 72 : 32;
   const bw = Math.max(80, maxX - minX);
   const bh = Math.max(80, maxY - minY);
-  const k = Math.max(0.28, Math.min(1.7, Math.min((w - pad * 2) / bw, (h - pad * 2) / bh)));
+  const k = Math.max(0.28, Math.min(1.7, Math.min((w - padX * 2) / bw, (h - padY * 2) / bh)));
   state.cam.k = k;
   state.cam.x = -((minX + maxX) / 2);
   state.cam.y = -((minY + maxY) / 2);
 }
 
 function currentModel() {
-  const key = state.mode === "all" ? "all" : `local:${state.focus}:${state.depth}`;
+  const key = state.mode === "all" ? "all" : `local:${state.focus}:${state.depth}:${state.minRatio}`;
   if (state.model && state.layoutKey === key) return state.model;
-  state.model = state.mode === "all" ? globalModel() : localModel();
+  state.model = state.mode === "all" ? globalModel() : stakeModel();
   state.model.nodes.forEach((n) => { n.fill = nodeFill(n); });
   state.layoutKey = key;
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (reduce) relax(state.model.nodes, state.model.links, state.mode === "all" ? 24 : 70);
+  if (state.mode === "all" && reduce) relax(state.model.nodes, state.model.links, 24);
   fit(state.model.nodes);
   renderLegend();
-  if (!reduce) heat(1);
+  if (state.mode === "all" && !reduce) heat(1);
   return state.model;
 }
 
 function nodeFill(n) {
   if (n.role === "center" || n.id === state.focus) return "#c4b5fd";
+  if (n.side === "out") return "#d4d4d8";
   if (!n.listed) {
     if (n.kind === "inst" || n.kind === "foreign") return "#93c5fd";
     if (n.kind === "person" || n.kind === "employee" || n.kind === "insurer") return "#f5d48a";
@@ -537,16 +649,25 @@ function nodeFill(n) {
 }
 
 function renderLegend() {
-  document.querySelector("#legend").innerHTML = [
+  const legend = document.querySelector("#legend");
+  if (state.mode !== "all") {
+    legend.hidden = true;
+    legend.innerHTML = "";
+    return;
+  }
+  legend.hidden = false;
+  legend.innerHTML = [
     ["#c4b5fd", "開いている銘柄"],
     ["#d4d4d8", "上場会社"],
-    ["#93c5fd", "機関"],
-    ["#f5d48a", "個人・持株会・保険"],
+    ["#e7c27d", "持ち合い"],
   ].map(([color, label]) => `<span><i class="swatch" style="background:${color}"></i>${label}</span>`).join("");
 }
 
 function queryText() {
-  return q.value.trim().toLowerCase().replace(/\s/g, "");
+  const typed = q.value.trim().toLowerCase().replace(/\s/g, "");
+  if (!typed || !state.focus || !state.by.has(state.focus)) return typed;
+  const selected = `${state.focus}${company(state.focus).name}`.toLowerCase().replace(/\s/g, "");
+  return typed === selected ? "" : typed;
 }
 
 function nodeMatches(n, text) {
@@ -555,6 +676,8 @@ function nodeMatches(n, text) {
 }
 
 function radiusOf(n) {
+  if (n.role === "center") return 16;
+  if (state.mode !== "all" && n.ratio) return Math.min(22, 5 + Math.sqrt(n.ratio) * 1.8);
   const base = state.mode === "all" ? 1.7 + Math.sqrt(n.deg || 1) * 0.85 : 5 + Math.sqrt(n.deg || 1) * 0.7;
   return n.id === state.focus ? base + 2.4 : base;
 }
@@ -584,9 +707,13 @@ function draw() {
     if (!a || !b) return;
     const on = !hitId || hot.has(a.id) || hot.has(b.id);
     const matched = !text || nodeMatches(a, text) || nodeMatches(b, text);
+    if (model.layout === "stake") {
+      drawStakeLink(a, b, l, on, matched, hitId);
+      return;
+    }
     const [x1, y1] = toScreen(a.x, a.y);
     const [x2, y2] = toScreen(b.x, b.y);
-    ctx.strokeStyle = hitId && on ? "#c4b5fd" : "#8a8a8a";
+    ctx.strokeStyle = hitId && on ? "#c4b5fd" : (l.mutual ? "#e7c27d" : "#8a8a8a");
     ctx.globalAlpha = on && matched ? (hitId ? 0.85 : 0.38) : 0.045;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -595,8 +722,33 @@ function draw() {
     ctx.stroke();
   });
   ctx.globalAlpha = 1;
-  const labelAll = state.mode !== "all" && model.nodes.length <= 36;
-  model.nodes.forEach((n) => {
+  if (model.layout === "stake") {
+    model.nodes.forEach((n) => {
+      const [x, y] = toScreen(n.x, n.y);
+      const active = !hitId || hot.has(n.id);
+      const matched = !text || nodeMatches(n, text);
+      const r = Math.max(4, radiusOf(n));
+      ctx.globalAlpha = active && matched ? 1 : 0.1;
+      ctx.beginPath();
+      ctx.fillStyle = n.role === "center" ? "#c4b5fd" : (n.fill || nodeFill(n));
+      if (n.role === "center" || n.id === hitId) {
+        ctx.shadowColor = n.role === "center" ? "#c4b5fd" : "#ffffff";
+        ctx.shadowBlur = 14;
+      }
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    });
+    drawStakeLabels(model, hot, hitId, text);
+    drawStakeCaptions(model);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    return;
+  }
+  const boxes = [];
+  const ordered = model.nodes.slice().sort((a, b) => (b.ratio || 0) - (a.ratio || 0));
+  ordered.forEach((n) => {
     const [x, y] = toScreen(n.x, n.y);
     const active = !hitId || hot.has(n.id);
     const matched = !text || nodeMatches(n, text);
@@ -611,24 +763,173 @@ function draw() {
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    const show = labelAll || n.id === hitId || n.id === state.focus || (hitId && hot.has(n.id) && state.mode !== "all");
-    if (show && active && matched) {
-      ctx.globalAlpha = 0.92;
-      ctx.fillStyle = "#ececec";
-      ctx.font = "500 12px Zen Kaku Gothic New, sans-serif";
-      ctx.fillText(shorten(n.name), x + r + 5, y + 4);
-    }
+    const forced = n.id === hitId || n.id === state.focus;
+    const want = state.mode !== "all" || forced || (state.cam.k > 1.6 && (n.deg || 0) >= 12);
+    if (!want || !active || !matched) return;
+    const stake = n.ratio ? ` ${pct(n.ratio)}` : "";
+    const label = `${shorten(n.name)}${n.role === "center" ? "" : stake}`;
+    ctx.font = "500 12px Zen Kaku Gothic New, sans-serif";
+    const tw = ctx.measureText(label).width;
+    const lx = x + r + 5;
+    const ly = y + 4;
+    const box = { x: lx, y: ly - 11, w: tw, h: 14 };
+    const crowded = boxes.some((b) => !(box.x > b.x + b.w + 2 || b.x > box.x + box.w + 2 || box.y > b.y + b.h || b.y > box.y + box.h));
+    if (crowded && !forced) return;
+    boxes.push(box);
+    ctx.globalAlpha = 0.94;
+    ctx.fillStyle = "#ececec";
+    ctx.fillText(label, lx, ly);
   });
   ctx.globalAlpha = 1;
 }
 
-function shorten(name) {
-  const s = String(name || "").replace(/株式会社|（株）|\(株\)/g, "").trim();
-  return s.length > 16 ? `${s.slice(0, 16)}…` : s;
+function shorten(name, limit = 16) {
+  const s = stripCo(name).trim();
+  return s.length > limit ? `${s.slice(0, limit)}…` : s;
+}
+
+function fitLabel(name, ratioText, maxW) {
+  const stake = ratioText ? ` ${ratioText}` : "";
+  const full = `${shorten(name, 18)}${stake}`;
+  if (ctx.measureText(full).width <= maxW) return full;
+  const stakeW = ctx.measureText(stake).width;
+  let room = maxW - stakeW;
+  if (room < 28) return ratioText || full;
+  let body = stripCo(name).trim();
+  const ell = "…";
+  while (body.length > 1 && ctx.measureText(body + ell).width > room) body = body.slice(0, -1);
+  return `${body}${ell}${stake}`;
+}
+
+function drawStakeLink(a, b, l, on, matched, hitId) {
+  const [x1, y1] = toScreen(a.x, a.y);
+  const [x2, y2] = toScreen(b.x, b.y);
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const r1 = Math.max(3.5, radiusOf(a)) + 2;
+  const r2 = Math.max(3.5, radiusOf(b)) + (b.role === "center" ? 20 : 12);
+  const sx = x1 + ux * r1;
+  const sy = y1 + uy * r1;
+  const ex = x2 - ux * r2;
+  const ey = y2 - uy * r2;
+  ctx.strokeStyle = hitId && on ? "#c4b5fd" : "#b7b7c2";
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.globalAlpha = on && matched ? (hitId ? 0.95 : 0.72) : 0.08;
+  ctx.lineWidth = Math.max(1, Math.min(4.5, (l.r || 1) / 7));
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(ex, ey);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - ux * 9 - uy * 4.5, ey - uy * 9 + ux * 4.5);
+  ctx.lineTo(ex - ux * 9 + uy * 4.5, ey - uy * 9 - ux * 4.5);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawStakeLabels(model, hot, hitId, text) {
+  model.nodes.forEach((n) => {
+    const active = !hitId || hot.has(n.id);
+    const matched = !text || nodeMatches(n, text);
+    if (!active || !matched) return;
+    const [x, y] = toScreen(n.x, n.y);
+    const r = Math.max(3.5, radiusOf(n));
+    ctx.globalAlpha = 0.96;
+    ctx.fillStyle = n.id === hitId || n.role === "center" ? "#ffffff" : "#e8e8e8";
+    ctx.textBaseline = "middle";
+    if (n.role === "center") {
+      ctx.textAlign = "center";
+      ctx.font = "700 15px Zen Kaku Gothic New, sans-serif";
+      ctx.fillText(shorten(n.name, 18), x, y + r + 18);
+      return;
+    }
+    ctx.font = "500 12px Zen Kaku Gothic New, sans-serif";
+    const { w } = viewSize();
+    const ratioText = n.ratio ? pct(n.ratio) : "";
+    if (n.side === "in") {
+      const maxW = Math.max(48, x - r - 14);
+      ctx.textAlign = "right";
+      ctx.fillText(fitLabel(n.name, ratioText, maxW), x - r - 8, y);
+    } else {
+      const maxW = Math.max(48, w - (x + r + 14));
+      ctx.textAlign = "left";
+      ctx.fillText(fitLabel(n.name, ratioText, maxW), x + r + 8, n.controller ? y - 8 : y);
+      if (n.controller) {
+        ctx.fillStyle = "#d6ccf5";
+        ctx.font = "500 11px Zen Kaku Gothic New, sans-serif";
+        ctx.fillText(`筆頭 ${fitLabel(n.controller, pct(n.controllerRatio), Math.max(36, maxW - 32))}`, x + r + 8, y + 9);
+      }
+    }
+  });
+}
+
+function drawStakeCaptions(model) {
+  ctx.font = "500 13px Zen Kaku Gothic New, sans-serif";
+  ctx.fillStyle = "#aeb6c2";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.globalAlpha = 0.95;
+  const specs = [];
+  if (model.nodes.some((n) => n.side === "in")) specs.push(["in", -340, "この株の持ち主"]);
+  if (model.nodes.some((n) => n.side === "out")) specs.push(["out", 340, "この会社の持ち株"]);
+  if (!specs.length) return;
+  const placed = specs.map(([side, fallbackX]) => {
+    const group = model.nodes.filter((n) => n.side === side);
+    const x = group.length ? group.reduce((s, n) => s + n.x, 0) / group.length : fallbackX;
+    const top = group.length ? Math.min(...group.map((n) => n.y)) : 0;
+    const [sx, sy] = toScreen(x, top);
+    return { sx, sy };
+  });
+  const y = Math.max(20, Math.min(...placed.map((p) => p.sy)) - 28);
+  specs.forEach(([, , text], i) => ctx.fillText(text, placed[i].sx, y));
+}
+
+function showTip(n, ev) {
+  const tip = document.querySelector("#tip");
+  if (!n || state.drag || state.dragNode) {
+    tip.hidden = true;
+    return;
+  }
+  const role = n.side === "in" ? "この株の持ち主"
+    : n.side === "out" ? "この会社の持ち株"
+      : n.side === "far" ? "その銘柄の筆頭"
+        : n.role === "center" ? "見ている銘柄" : "上場会社";
+  const stake = n.ratio ? `\n${pct(n.ratio)}` : "";
+  const code = n.code ? `  ${n.code}` : "";
+  tip.hidden = false;
+  tip.textContent = `${n.name}${code}\n${role}${stake}`;
+  const stage = canvas.parentElement.getBoundingClientRect();
+  tip.style.left = `${Math.min(ev.clientX - stage.left + 14, stage.width - 220)}px`;
+  tip.style.top = `${Math.min(ev.clientY - stage.top + 16, stage.height - 78)}px`;
 }
 
 function hit(px, py) {
   if (!state.model) return null;
+  if (state.model.layout === "stake") {
+    let best = null;
+    let bestD = Infinity;
+    state.model.nodes.forEach((n) => {
+      const [x, y] = toScreen(n.x, n.y);
+      const r = radiusOf(n);
+      const dy = Math.abs(py - y);
+      if (dy > Math.max(16, r + 4)) return;
+      let x0 = x - r - 6;
+      let x1 = x + r + 6;
+      if (n.side === "in") x0 = x - 200;
+      if (n.side === "out" || n.side === "far") x1 = x + 200;
+      if (px < x0 || px > x1) return;
+      const d = dy;
+      if (d < bestD) {
+        best = n;
+        bestD = d;
+      }
+    });
+    return best;
+  }
   let best = null;
   let bestD = Infinity;
   state.model.nodes.forEach((n) => {
@@ -646,7 +947,8 @@ function hit(px, py) {
 canvas.addEventListener("mousemove", (ev) => {
   const r = canvas.getBoundingClientRect();
   const n = hit(ev.clientX - r.left, ev.clientY - r.top);
-  if (state.dragNode) {
+  const stake = state.model && state.model.layout === "stake";
+  if (state.dragNode && !stake) {
     if (Math.hypot(ev.movementX, ev.movementY) > 2) state.moved = true;
     if (state.dragNode.role !== "center") state.dragNode.pinned = false;
     state.dragNode.x += ev.movementX / state.cam.k;
@@ -655,20 +957,31 @@ canvas.addEventListener("mousemove", (ev) => {
       state.dragNode.x = 0;
       state.dragNode.y = 0;
     }
+    document.querySelector("#tip").hidden = true;
     heat(0.42);
+    return;
+  }
+  if ((state.dragNode && stake) || state.drag) {
+    if (Math.hypot(ev.movementX, ev.movementY) > 2) state.moved = true;
+    state.cam.x += ev.movementX / state.cam.k;
+    state.cam.y += ev.movementY / state.cam.k;
+    document.querySelector("#tip").hidden = true;
+    draw();
     return;
   }
   const id = n ? n.id : null;
   if (id !== state.hover) {
     state.hover = id;
-    canvas.style.cursor = n ? "pointer" : (state.drag ? "grabbing" : "grab");
+    const clickable = n && n.code && state.by.has(n.code);
+    canvas.style.cursor = clickable ? "pointer" : "grab";
     draw();
   }
-  if (state.drag) {
-    state.cam.x += ev.movementX / state.cam.k;
-    state.cam.y += ev.movementY / state.cam.k;
-    draw();
-  }
+  showTip(n, ev);
+});
+canvas.addEventListener("mouseleave", () => {
+  state.hover = null;
+  document.querySelector("#tip").hidden = true;
+  if (state.data) draw();
 });
 canvas.addEventListener("mousedown", (ev) => {
   const r = canvas.getBoundingClientRect();
@@ -715,13 +1028,12 @@ async function boot() {
   });
   const withHolders = state.data.companies.filter((c) => c.holders.length).length;
   document.querySelector("#lede").textContent =
-    `${state.data.source}。大株主表があるのは ${withHolders.toLocaleString("ja-JP")} 社、上場会社どうしの出資は ${state.data.edges.length.toLocaleString("ja-JP")} 本です。`;
+    `${withHolders.toLocaleString("ja-JP")}社の大株主を引けます。コードか社名で、誰が何%持っているかを見てください。東証の全上場ではなく、2024年以降の有報で表を復元できた会社です。`;
   document.querySelector("#foot").textContent =
-    "投資助言ではありません。表の罫線が落ちたテキストから復元しているため、株数と比率の境界を誤ることがあります。検証は有報の原文に戻してください。初期配置の種は、業種の並びと出資関係から置いています。";
+    "投資助言ではありません。有報の表をテキストから復元しているため、比率が原文と違う行があります。ネットワークの中心性だけ Colab の A100 で計算し、大株主の読み取りは手元で行いました。";
   renderLists();
   if (!state.by.has(state.focus)) state.focus = state.data.companies.find((c) => c.holders.length).code;
-  renderDetail();
-  document.querySelector("#depth").hidden = true;
+  select(state.focus);
   resize();
 }
 

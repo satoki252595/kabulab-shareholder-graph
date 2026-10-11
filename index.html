@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>持合い — 直近有報の株主グラフ</title>
+  <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -13,43 +14,47 @@
   <header class="top">
     <div class="brand">
       <h1>持合い</h1>
-      <p id="lede">直近の有価証券報告書から読んだ大株主です。</p>
+      <p id="lede">コードか社名で、誰が何%持っているかを見ます。</p>
     </div>
     <form class="search" role="search" id="search-form">
       <label class="sr" for="q">銘柄コードか社名</label>
-      <input id="q" type="search" placeholder="コードか社名" autocomplete="off" spellcheck="false">
+      <input id="q" type="search" placeholder="9435 や 光通信" autocomplete="off" spellcheck="false">
       <ul id="suggest" class="suggest" hidden></ul>
     </form>
   </header>
 
-  <div class="modes" role="tablist">
-    <button type="button" class="mode" data-mode="all" aria-selected="true">全体</button>
-    <button type="button" class="mode" data-mode="local" aria-selected="false">この銘柄</button>
+  <div class="modes">
+    <div class="modebar" role="tablist">
+      <button type="button" class="mode" data-mode="local" aria-selected="true">この銘柄</button>
+      <button type="button" class="mode" data-mode="all" aria-selected="false">全体図</button>
+    </div>
+    <div class="depth" id="depth">
+      <button type="button" id="floor" aria-pressed="true">5%以上だけ</button>
+      <span>持ち株の筆頭</span>
+      <button type="button" data-depth="1" aria-pressed="true">出さない</button>
+      <button type="button" data-depth="2" aria-pressed="false">出す</button>
+    </div>
   </div>
 
   <main>
     <aside class="lists" aria-label="銘柄リスト">
       <section>
-        <h2>株主ハブ</h2>
+        <h2>持ち株の多い会社</h2>
         <ol id="hubs"></ol>
       </section>
       <section>
-        <h2>事業会社の比率が下がった銘柄</h2>
+        <h2>持ち分が減った銘柄</h2>
         <ol id="drops"></ol>
       </section>
       <section>
-        <h2>相互に持ち合う組</h2>
+        <h2>互いに持ち合っている組</h2>
         <ol id="pairs"></ol>
       </section>
     </aside>
 
     <section class="stage" aria-label="株主グラフ">
       <canvas id="graph"></canvas>
-      <div class="depth" id="depth" hidden>
-        <span>深さ</span>
-        <button type="button" data-depth="1" aria-pressed="true">1</button>
-        <button type="button" data-depth="2" aria-pressed="false">2</button>
-      </div>
+      <p id="tip" class="tip" hidden></p>
       <p id="graph-note" class="note"></p>
       <div class="legend" id="legend"></div>
     </section>
