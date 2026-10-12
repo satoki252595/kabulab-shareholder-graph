@@ -101,6 +101,32 @@ def main():
         edges.append({"h": e["holder"], "i": e["issuer"], "r": e["ratio"]})
         nodes.add(e["holder"])
         nodes.add(e["issuer"])
+    for code, meta in master.items():
+        if code in companies:
+            continue
+        companies[code] = {
+            "code": code,
+            "name": meta.get("name") or code,
+            "sector": meta.get("sector") or "",
+            "period": "",
+            "prior": "",
+            "stable": None,
+            "inst": None,
+            "listed": None,
+            "person": None,
+            "employee": None,
+            "insurer": None,
+            "corp": None,
+            "top10": None,
+            "listedDelta": None,
+            "instDelta": None,
+            "sell": None,
+            "cross": False,
+            "inDeg": 0,
+            "outDeg": 0,
+            "pr": round(pr.get(code, 0), 6),
+            "holders": [],
+        }
     for code in nodes:
         if code not in companies:
             m = master.get(code) or {}
@@ -166,8 +192,8 @@ def main():
             pos[code][1] += disp[i][1]
 
     payload = {
-        "asof": "2026-10-11",
-        "source": "EDINET有価証券報告書（株式情報基盤の有報テキスト、会計期末2024-01-01以降の直近）",
+        "asof": "2026-10-12",
+        "source": "EDINET有価証券報告書（株式情報基盤の有報テキスト。銘柄マスタの各社について、取れる直近の大株主表）",
         "device": gpu.get("device") or "",
         "companies": list(companies.values()),
         "edges": edges,

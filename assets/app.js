@@ -1027,10 +1027,11 @@ async function boot() {
     state.adj.get(e.i).push({ other: e.h, r: e.r });
   });
   const withHolders = state.data.companies.filter((c) => c.holders.length).length;
+  const named = state.data.companies.filter((c) => c.name && c.name !== c.code).length;
   document.querySelector("#lede").textContent =
-    `${withHolders.toLocaleString("ja-JP")}社の大株主を引けます。コードか社名で、誰が何%持っているかを見てください。東証の全上場ではなく、2024年以降の有報で表を復元できた会社です。`;
+    `載っている銘柄は ${named.toLocaleString("ja-JP")} 社です。大株主表が読めたのは ${withHolders.toLocaleString("ja-JP")} 社です。コードか社名で、誰が何%持っているかを見てください。`;
   document.querySelector("#foot").textContent =
-    "投資助言ではありません。有報の表をテキストから復元しているため、比率が原文と違う行があります。ネットワークの中心性だけ Colab の A100 で計算し、大株主の読み取りは手元で行いました。";
+    "投資助言ではありません。有報の表をテキストから復元しているため、比率が原文と違う行があります。表を読めなかった銘柄は社名だけ出します。";
   renderLists();
   if (!state.by.has(state.focus)) state.focus = state.data.companies.find((c) => c.holders.length).code;
   select(state.focus);
