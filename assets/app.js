@@ -136,25 +136,19 @@ function select(code) {
 
 function renderLists() {
   const book = state.mode === "book";
-  document.querySelector("#list-a").textContent = book ? "上場の計上額が大きい会社" : "持ち株の多い会社";
-  document.querySelector("#list-b").textContent = book ? "非上場の銘柄数が多い会社" : "持ち分が減った銘柄";
-  document.querySelector("#list-c").textContent = book ? "銘柄名が読めた会社" : "互いに持ち合っている組";
+  document.querySelector("#list-a").textContent = book ? "保有時価の合計が大きい会社" : "持ち株の多い会社";
+  document.querySelector("#list-b").textContent = book ? "時価を計算できた保有が多い会社" : "持ち分が減った銘柄";
+  document.querySelector("#list-c").textContent = book ? "名前だけ残った保有が多い会社" : "互いに持ち合っている組";
   if (book) {
-    const byBook = state.data.companies
-      .filter((c) => c.securities && c.securities.listedBook)
-      .sort((a, b) => b.securities.listedBook - a.securities.listedBook)
-      .slice(0, 12);
-    document.querySelector("#hubs").innerHTML = byBook.map((c) => row(c, millionYen(c.securities.listedBook))).join("");
-    const byCount = state.data.companies
-      .filter((c) => c.securities && c.securities.unlistedN)
-      .sort((a, b) => b.securities.unlistedN - a.securities.unlistedN)
-      .slice(0, 12);
-    document.querySelector("#drops").innerHTML = byCount.map((c) => row(c, `${c.securities.unlistedN}銘柄`)).join("");
-    const named = state.data.companies
-      .filter((c) => c.securities && (c.securities.names || []).length)
-      .sort((a, b) => b.securities.names.length - a.securities.names.length)
-      .slice(0, 12);
-    document.querySelector("#pairs").innerHTML = named.map((c) => row(c, `${c.securities.names.length}件`)).join("");
+    const sumValue = (c) => (c.securities?.names || []).reduce((s, n) => s + (n.value || 0), 0);
+    const priced = (c) => (c.securities?.names || []).filter((n) => n.value).length;
+    const bare = (c) => (c.securities?.names || []).filter((n) => !n.code).length;
+    const byValue = state.data.companies.filter((c) => sumValue(c) > 0).sort((a, b) => sumValue(b) - sumValue(a)).slice(0, 12);
+    document.querySelector("#hubs").innerHTML = byValue.map((c) => row(c, yen(sumValue(c)))).join("");
+    const byPriced = state.data.companies.filter((c) => priced(c) > 0).sort((a, b) => priced(b) - priced(a)).slice(0, 12);
+    document.querySelector("#drops").innerHTML = byPriced.map((c) => row(c, `${priced(c)}社`)).join("");
+    const byBare = state.data.companies.filter((c) => bare(c) > 0).sort((a, b) => bare(b) - bare(a)).slice(0, 12);
+    document.querySelector("#pairs").innerHTML = byBare.map((c) => row(c, `${bare(c)}社`)).join("");
     bindLists();
     return;
   }
@@ -268,28 +262,25 @@ function supplement(c) {
 function bookReading(c) {
   const s = c.securities;
   if (!s) return "この銘柄の「株式の保有状況」は読めていません。";
-  const bit = (label, n, book) => {
-    if (n == null) return "";
-    if (!n && !book) return `${label}の保有はありません。`;
-    return `${label}は ${n.toLocaleString("ja-JP")} 銘柄、計上 ${millionYen(book)}。`;
-  };
-  const u = bit("非上場", s.unlistedN, s.unlistedBook);
-  const l = bit("上場", s.listedN, s.listedBook);
-  const named = (s.names || []).length
-    ? `銘柄名と株数が残っていたのは ${s.names.length} 件です。`
-    : "個別の銘柄名は、本文が2,000字で切れて残っていません。";
-  return `${u}${l}${named}`;
+  const names = s.names || [];
+  if (!names.length) return "この欄から会社名は読めていません。";
+  const priced = names.filter((n) => n.value);
+  const total = priced.reduce((sum, n) => sum + n.value, 0);
+  const asof = state.data.marketAsOf || "2026-06-16";
+  const money = priced.length ? `上場で株価を掛けられたのは ${priced.length} 社、保有時価の合計は ${yen(total)} です。株価は ${asof} です。` : "上場株の株価は、この基準日の時価総額データにありません。";
+  return `会社名が読めた保有は ${names.length} 社です。${money}`;
 }
 
 function bookBlocks(c) {
   const s = c.securities;
   if (!s) return `<p class="quiet">有価証券の表は取れていません。</p>`;
-  const rows = (s.names || []).map((n) => {
+  const rows = (s.names || []).slice().sort((a, b) => (b.value || 0) - (a.value || 0) || (b.shares || 0) - (a.shares || 0)).map((n) => {
     const label = n.code && state.by.has(n.code) ? company(n.code).name : n.name;
-    const approx = n.value ? `保有時価の近似 ${yen(n.value)}` : (n.code ? "時価は補完データにありません" : "非上場、または社名が一致しません");
-    return line(label, approx, null, n.code, n.code ? "out" : "people", shareShort(n.shares));
+    const kind = n.value && n.price ? `株価 ${yen(n.price)}　${shareShort(n.shares)}` : n.code ? `${shareShort(n.shares)}　株価なし` : `${shareShort(n.shares)}　非上場または社名不一致`;
+    const shown = n.value ? yen(n.value) : shareShort(n.shares);
+    return line(label, kind, null, n.code, n.code ? "out" : "people", shown);
   }).join("");
-  return `<h2 class="block">読めた保有銘柄</h2>${rows || `<p class="quiet">名前の行は残っていません。上の銘柄数と計上額だけです。</p>`}`;
+  return `<h2 class="block">保有している会社</h2>${rows || `<p class="quiet">会社名は読めていません。</p>`}`;
 }
 
 function reading(c) {
@@ -524,20 +515,14 @@ function bookModel() {
     kind: "corp", role: "center", side: "center", x: 0, y: 0, pinned: true,
   }];
   const links = [];
-  const items = [];
-  if (sec && (sec.names || []).length) {
-    sec.names.forEach((n) => items.push({
-      label: n.code && state.by.has(n.code) ? company(n.code).name : n.name,
-      code: n.code || "",
-      shares: n.shares,
-      value: n.value,
-      listed: Boolean(n.code),
-    }));
-  } else if (sec) {
-    if (sec.listedN) items.push({ label: "上場", count: sec.listedN, book: sec.listedBook, listed: true });
-    if (sec.unlistedN) items.push({ label: "非上場", count: sec.unlistedN, book: sec.unlistedBook, listed: false });
-  }
-  const gap = 58;
+  const items = ((sec && sec.names) || []).slice().sort((a, b) => (b.value || 0) - (a.value || 0) || (b.shares || 0) - (a.shares || 0)).slice(0, 18).map((n) => ({
+    label: n.code && state.by.has(n.code) ? company(n.code).name : n.name,
+    code: n.code || "",
+    shares: n.shares,
+    value: n.value,
+    listed: Boolean(n.code),
+  }));
+  const gap = items.length > 12 ? 46 : 58;
   const y0 = -((Math.max(items.length, 1) - 1) * gap) / 2;
   items.forEach((item, i) => {
     const id = `sec:${i}:${item.code || item.label}`;
@@ -553,16 +538,16 @@ function bookModel() {
       book: item.book || null,
       count: item.count || null,
       value: item.value || null,
-      ratio: item.shares ? Math.min(36, Math.log10(item.shares) * 3) : 8,
+      ratio: item.value ? Math.min(40, Math.log10(item.value) * 1.6) : item.shares ? 6 : 4,
       x: 360,
       y: y0 + i * gap,
     });
     links.push({ from: c.code, to: id, r: 6, dir: "out" });
   });
-  const named = sec && (sec.names || []).length;
-  const note = named
-    ? "右は、本文に残っていた保有銘柄と株数です。計上額の合計は右の欄にあります。"
-    : "右は上場と非上場の区分です。個別の銘柄名は、本文が2,000字で切れていない会社だけ出ます。";
+  const hidden = Math.max(0, ((sec && sec.names) || []).length - items.length);
+  const note = items.length
+    ? `右は保有先の会社です。上場は2026-06-16の株価×株数です。${hidden ? `時価の大きい順に${items.length}社で、残りは右の一覧です。` : ""}`
+    : "この欄から会社名は読めていません。";
   return { nodes, links, note, layout: "stake" };
 }
 
@@ -992,7 +977,7 @@ function drawStakeLabels(model, hot, hitId, text) {
     }
     ctx.font = "500 12px Zen Kaku Gothic New, sans-serif";
     const { w } = viewSize();
-    const ratioText = n.shares ? shareShort(n.shares) : n.count != null ? `${n.count}銘柄` : n.ratio ? pct(n.ratio) : "";
+    const ratioText = n.value ? yen(n.value) : n.shares ? shareShort(n.shares) : n.count != null ? `${n.count}銘柄` : n.ratio ? pct(n.ratio) : "";
     if (n.side === "in") {
       const maxW = Math.max(48, x - r - 14);
       ctx.textAlign = "right";
@@ -1176,7 +1161,7 @@ async function boot() {
   document.querySelector("#lede").textContent =
     `載っている銘柄は ${named.toLocaleString("ja-JP")} 社です。大株主表が読めたのは ${withHolders.toLocaleString("ja-JP")} 社です。コードか社名で、誰が何%持っているかを見てください。`;
   document.querySelector("#foot").textContent =
-    "投資助言ではありません。有報の表をテキストから復元しているため、比率や銘柄数が原文と違う行があります。発行済株式数と時価総額は2026-06-16の株価です。有価証券の個別名は、本文が2,000字で切れる前に残った行だけです。";
+    "投資助言ではありません。有報の表をテキストから復元しているため、社名や株数が原文と違う行があります。上場株の保有時価は、2026-06-16の株価に保有株数を掛けたものです。株価のない名前は、非上場か、社名が銘柄マスタと一致しなかったものです。";
   renderLists();
   if (!state.by.has(state.focus)) state.focus = state.data.companies.find((c) => c.holders.length).code;
   select(state.focus);

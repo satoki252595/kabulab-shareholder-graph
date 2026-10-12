@@ -215,16 +215,20 @@ def main():
         src = securities.get(code) or {}
         buckets = src.get("buckets") or {}
         names = []
-        for item in (src.get("names") or [])[:12]:
+        for item in (src.get("names") or []):
             held = item.get("shares")
+            price = None
             approx = None
             target = market.get(item.get("code") or "")
             if held and target and target.get("shares") and target.get("marketCap"):
-                approx = int(held / target["shares"] * target["marketCap"])
+                price = target["marketCap"] / target["shares"]
+                approx = int(held * price)
+                price = round(price, 2)
             names.append({
                 "name": item.get("name") or "",
                 "shares": held,
                 "code": item.get("code") or "",
+                "price": price,
                 "value": approx,
             })
         row["securities"] = None
