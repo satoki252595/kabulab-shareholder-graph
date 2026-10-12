@@ -26,6 +26,7 @@
   <div class="modes">
     <div class="modebar" role="tablist">
       <button type="button" class="mode" data-mode="local" aria-selected="true">この銘柄</button>
+      <button type="button" class="mode" data-mode="book" aria-selected="false">有価証券</button>
       <button type="button" class="mode" data-mode="all" aria-selected="false">全体図</button>
     </div>
     <div class="depth" id="depth">
@@ -39,15 +40,15 @@
   <main>
     <aside class="lists" aria-label="銘柄リスト">
       <section>
-        <h2>持ち株の多い会社</h2>
+        <h2 id="list-a">持ち株の多い会社</h2>
         <ol id="hubs"></ol>
       </section>
       <section>
-        <h2>持ち分が減った銘柄</h2>
+        <h2 id="list-b">持ち分が減った銘柄</h2>
         <ol id="drops"></ol>
       </section>
       <section>
-        <h2>互いに持ち合っている組</h2>
+        <h2 id="list-c">互いに持ち合っている組</h2>
         <ol id="pairs"></ol>
       </section>
     </aside>

@@ -8,6 +8,22 @@ from pathlib import Path
 ROOT = Path("/tmp/sh_analysis/out")
 DEST = Path(__file__).resolve().parents[1] / "data" / "graph.json"
 
+
+def load_supplements():
+    asof = ""
+    market = {}
+    securities = {}
+    market_path = ROOT / "marketcap.json"
+    if market_path.exists():
+        raw = json.loads(market_path.read_text())
+        asof = raw.get("asof") or ""
+        market = raw.get("rows") or {}
+    sec_path = ROOT / "securities.json"
+    if sec_path.exists():
+        for row in json.loads(sec_path.read_text()):
+            securities[row["code"]] = row
+    return asof, market, securities
+
 CUSTODY = (
     "カストディ", "マスタートラスト", "トラスティ", "信託口", "信託銀行",
     "ステートストリート", "STATE STREET", "SSBTC", "BANK OF NEW YORK", "BNY",
@@ -191,8 +207,40 @@ def main():
             pos[code][0] += disp[i][0]
             pos[code][1] += disp[i][1]
 
+    asof_market, market, securities = load_supplements()
+    for code, row in companies.items():
+        quote = market.get(code) or {}
+        row["sharesOut"] = quote.get("shares")
+        row["marketCap"] = quote.get("marketCap")
+        src = securities.get(code) or {}
+        buckets = src.get("buckets") or {}
+        names = []
+        for item in (src.get("names") or [])[:12]:
+            held = item.get("shares")
+            approx = None
+            target = market.get(item.get("code") or "")
+            if held and target and target.get("shares") and target.get("marketCap"):
+                approx = int(held / target["shares"] * target["marketCap"])
+            names.append({
+                "name": item.get("name") or "",
+                "shares": held,
+                "code": item.get("code") or "",
+                "value": approx,
+            })
+        row["securities"] = None
+        if buckets or names:
+            row["securities"] = {
+                "period": (src.get("period") or "")[:10],
+                "unlistedN": buckets.get("unlistedN"),
+                "unlistedBook": buckets.get("unlistedBook"),
+                "listedN": buckets.get("listedN"),
+                "listedBook": buckets.get("listedBook"),
+                "names": names,
+            }
+
     payload = {
-        "asof": "2026-10-12",
+        "asof": "2026-10-13",
+        "marketAsOf": asof_market,
         "source": "EDINET有価証券報告書（株式情報基盤の有報テキスト。銘柄マスタの各社について、取れる直近の大株主表）",
         "device": gpu.get("device") or "",
         "companies": list(companies.values()),
