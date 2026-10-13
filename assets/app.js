@@ -814,7 +814,7 @@ function draw() {
   if (!state.data) return;
   const { w, h } = viewSize();
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#1e1e1e";
+  ctx.fillStyle = "#101013";
   ctx.fillRect(0, 0, w, h);
   const model = currentModel();
   document.querySelector("#graph-note").textContent = model.note;

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>リスクの差分 — 直近有報の事業等のリスク</title>
+  <meta name="description" content="直前の期と比べた「事業等のリスク」の差分を1枚で見る。増えた見出し、落ちた見出し、解消の判断。">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="app.css">
   <script>
@@ -17,22 +18,26 @@
   <a class="skip" href="#detail">読みへ</a>
   <header class="top">
     <div class="bar">
-      <h1><a href="./">リスクの差分</a></h1>
+      <a class="brandmark" href="../">KABU&nbsp;LAB</a>
+      <nav class="servicenav" aria-label="サービス">
+        <a href="../">持合い</a>
+        <a href="./" aria-current="page">リスクの差分</a>
+      </nav>
       <form class="search" role="search" id="search-form">
         <label class="sr" for="q">銘柄コードか社名</label>
-        <input id="q" type="search" placeholder="6662 や ユビテック" autocomplete="off" spellcheck="false" enterkeyhint="search">
+        <input id="q" type="search" placeholder="銘柄コード・社名で検索" autocomplete="off" spellcheck="false" enterkeyhint="search">
         <ul id="suggest" class="suggest" role="listbox" hidden></ul>
       </form>
-      <div class="tools">
-        <a class="textlink" href="../">持合い</a>
-        <button type="button" id="theme" aria-pressed="false">ダーク</button>
-      </div>
+      <button type="button" id="theme" aria-pressed="false">ダーク</button>
     </div>
   </header>
 
   <div class="wrap">
-    <p class="lede" id="lede">コードか社名で、直前の期と比べた「事業等のリスク」を1枚で見ます。</p>
-    <p class="disclaimer" id="disclaimer">投資助言ではない。売買の推奨でもない。金額は有報の文から写したものだけ。</p>
+    <div class="intro">
+      <h1>リスクの差分</h1>
+      <p class="lede" id="lede">コードか社名で、直前の期と比べた「事業等のリスク」を1枚で見ます。</p>
+      <p class="disclaimer" id="disclaimer">投資助言ではない。売買の推奨でもない。金額は有報の文から写したものだけ。</p>
+    </div>
 
     <nav class="chips" aria-label="読みの種類">
       <button type="button" class="chip" data-list="calendar" aria-pressed="false">取引所の日付</button>
@@ -64,6 +69,7 @@
 
     <footer>
       <p id="foot"></p>
+      <p class="footnav"><a href="../">持合い →</a></p>
     </footer>
   </div>
   <script src="readings.js"></script>

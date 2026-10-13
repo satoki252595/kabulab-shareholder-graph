@@ -4,24 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>持合い — 直近有報の株主グラフ</title>
+  <meta name="description" content="直近の有価証券報告書から読んだ大株主をグラフで見る。誰が何%持っているか、互いに持ち合っている組が分かる。">
   <link rel="icon" href="data:,">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
+  <a class="skip" href="#detail">銘柄の読みへ</a>
   <header class="top">
-    <div class="brand">
-      <h1>持合い</h1>
-      <p id="lede">コードか社名で、誰が何%持っているかを見ます。</p>
-    </div>
+    <a class="brandmark" href="./">KABU&nbsp;LAB</a>
+    <nav class="servicenav" aria-label="サービス">
+      <a href="./" aria-current="page">持合い</a>
+      <a href="risk/">リスクの差分</a>
+    </nav>
     <form class="search" role="search" id="search-form">
       <label class="sr" for="q">銘柄コードか社名</label>
-      <input id="q" type="search" placeholder="9435 や 光通信" autocomplete="off" spellcheck="false">
+      <input id="q" type="search" placeholder="銘柄コード・社名で検索" autocomplete="off" spellcheck="false">
       <ul id="suggest" class="suggest" hidden></ul>
     </form>
   </header>
+
+  <div class="intro">
+    <h1>持合い</h1>
+    <p id="lede">コードか社名で、誰が何%持っているかを見ます。</p>
+  </div>
 
   <div class="modes">
     <div class="modebar" role="tablist">
@@ -67,7 +72,7 @@
 
   <footer>
     <p id="foot"></p>
-    <p><a href="risk/">事業等のリスクの差分</a></p>
+    <p class="footnav"><a href="risk/">事業等のリスクの差分 →</a></p>
   </footer>
   <script src="assets/app.js"></script>
 </body>
