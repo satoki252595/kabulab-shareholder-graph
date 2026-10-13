@@ -193,7 +193,7 @@ function bindLists() {
 
 function row(c, extra, tone) {
   const cls = tone ? ` class="num ${tone}"` : ` class="num"`;
-  return `<li><button type="button" data-code="${c.code}"><span class="code">${c.code}</span><span class="name">${escapeHtml(c.name)}</span><span${cls}>${extra}</span></button></li>`;
+  return `<li><button type="button" data-code="${c.code}" title="${escapeHtml(c.name)}"><span class="code">${c.code}</span><span class="name">${escapeHtml(c.name)}</span><span${cls}>${extra}</span></button></li>`;
 }
 
 function escapeHtml(s) {
@@ -404,6 +404,29 @@ suggest.addEventListener("click", (ev) => {
   if (btn) select(btn.dataset.code);
 });
 document.querySelector("#search-form").addEventListener("submit", (ev) => ev.preventDefault());
+
+// Theme toggle, shared with risk/ via the same localStorage key.
+(function initTheme() {
+  const btn = document.querySelector("#theme");
+  if (!btn) return;
+  const effective = () => {
+    const set = document.documentElement.getAttribute("data-theme");
+    if (set === "dark" || set === "light") return set;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  };
+  const sync = () => {
+    const dark = effective() === "dark";
+    btn.setAttribute("aria-pressed", dark ? "true" : "false");
+    btn.textContent = dark ? "ライト" : "ダーク";
+  };
+  sync();
+  btn.addEventListener("click", () => {
+    const next = effective() === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("yuho-theme", next); } catch (e) {}
+    sync();
+  });
+})();
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "/" && document.activeElement !== q) {
     ev.preventDefault();

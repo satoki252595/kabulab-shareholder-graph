@@ -60,6 +60,34 @@ def kind_of(name):
     return "person"
 
 
+# 銘柄マスタ(master.json)に無く、analysis 側で社名がコードになっている22社。
+# 2026-10 に Yahoo!ファイナンス / 株探 の銘柄ページで確認した。
+NAME_FIXES = {
+    "1726": "株式会社ビーアールホールディングス",
+    "1776": "三井住建道路株式会社",
+    "2344": "平安レイサービス株式会社",
+    "3593": "ホギメディカル",
+    "3924": "ランドコンピュータ",
+    "4333": "東邦システムサイエンス",
+    "4530": "久光製薬",
+    "4556": "カイノス",
+    "4917": "マンダム",
+    "4974": "タカラバイオ",
+    "5727": "東邦チタニウム",
+    "6173": "アクアライン",
+    "6201": "豊田自動織機",
+    "6210": "ＴＯＹＯイノベックス",
+    "6293": "日精樹脂工業",
+    "6403": "水道機工",
+    "6670": "ＭＣＪ",
+    "6901": "澤藤電機",
+    "7088": "フォーラムエンジニアリング",
+    "7229": "ユタカ技研",
+    "7922": "三光産業",
+    "7925": "前澤化成工業",
+}
+
+
 def artifact_delta(c):
     prior = c.get("P") or {}
     prev = {h["code"]: h for h in prior.get("listed") or []}
@@ -169,6 +197,10 @@ def main():
                 "pr": round(pr.get(code, 0), 6),
                 "holders": [],
             }
+
+    for code, row in companies.items():
+        if not row["name"] or row["name"] == code:
+            row["name"] = NAME_FIXES.get(code) or row["name"]
 
     # Degree from the exported edges, including companies that only appear as holders.
     indeg = {c: 0 for c in companies}

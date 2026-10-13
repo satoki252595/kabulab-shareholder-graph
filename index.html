@@ -7,20 +7,29 @@
   <meta name="description" content="直近の有価証券報告書から読んだ大株主をグラフで見る。誰が何%持っているか、互いに持ち合っている組が分かる。">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="assets/app.css">
+  <script>
+    try {
+      var t = localStorage.getItem("yuho-theme");
+      if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
 </head>
 <body>
   <a class="skip" href="#detail">銘柄の読みへ</a>
   <header class="top">
-    <a class="brandmark" href="./">KABU&nbsp;LAB</a>
-    <nav class="servicenav" aria-label="サービス">
-      <a href="./" aria-current="page">持合い</a>
-      <a href="risk/">リスクの差分</a>
-    </nav>
-    <form class="search" role="search" id="search-form">
-      <label class="sr" for="q">銘柄コードか社名</label>
-      <input id="q" type="search" placeholder="銘柄コード・社名で検索" autocomplete="off" spellcheck="false">
-      <ul id="suggest" class="suggest" hidden></ul>
-    </form>
+    <div class="bar">
+      <a class="brandmark" href="./">KABU&nbsp;LAB</a>
+      <nav class="servicenav" aria-label="サービス">
+        <a href="./" aria-current="page">持合い</a>
+        <a href="risk/">リスクの差分</a>
+      </nav>
+      <form class="search" role="search" id="search-form">
+        <label class="sr" for="q">銘柄コードか社名</label>
+        <input id="q" type="search" placeholder="銘柄コード・社名で検索" autocomplete="off" spellcheck="false">
+        <ul id="suggest" class="suggest" hidden></ul>
+      </form>
+      <button type="button" id="theme" aria-pressed="false">ダーク</button>
+    </div>
   </header>
 
   <div class="intro">
