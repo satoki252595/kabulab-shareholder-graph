@@ -137,16 +137,16 @@ function select(code) {
 function renderLists() {
   const book = state.mode === "book";
   document.querySelector("#list-a").textContent = book ? "保有時価の合計が大きい会社" : "持ち株の多い会社";
-  document.querySelector("#list-b").textContent = book ? "時価を計算できた保有が多い会社" : "持ち分が減った銘柄";
+  document.querySelector("#list-b").textContent = book ? "保有時価 ÷ 自身の時価総額が大きい会社" : "持ち分が減った銘柄";
   document.querySelector("#list-c").textContent = book ? "名前だけ残った保有が多い会社" : "互いに持ち合っている組";
   if (book) {
-    const sumValue = (c) => (c.securities?.names || []).reduce((s, n) => s + (n.value || 0), 0);
-    const priced = (c) => (c.securities?.names || []).filter((n) => n.value).length;
+    const sumValue = (c) => holdingsValue(c);
     const bare = (c) => (c.securities?.names || []).filter((n) => !n.code).length;
     const byValue = state.data.companies.filter((c) => sumValue(c) > 0).sort((a, b) => sumValue(b) - sumValue(a)).slice(0, 12);
     document.querySelector("#hubs").innerHTML = byValue.map((c) => row(c, yen(sumValue(c)))).join("");
-    const byPriced = state.data.companies.filter((c) => priced(c) > 0).sort((a, b) => priced(b) - priced(a)).slice(0, 12);
-    document.querySelector("#drops").innerHTML = byPriced.map((c) => row(c, `${priced(c)}社`)).join("");
+    const weight = (c) => (sumValue(c) / c.marketCap) * 100;
+    const byWeight = state.data.companies.filter((c) => sumValue(c) > 0 && validMarketCap(c)).sort((a, b) => weight(b) - weight(a)).slice(0, 12);
+    document.querySelector("#drops").innerHTML = byWeight.map((c) => row(c, ratioText(weight(c)))).join("");
     const byBare = state.data.companies.filter((c) => bare(c) > 0).sort((a, b) => bare(b) - bare(a)).slice(0, 12);
     document.querySelector("#pairs").innerHTML = byBare.map((c) => row(c, `${bare(c)}社`)).join("");
     bindLists();
@@ -208,7 +208,14 @@ function renderDetail() {
     return;
   }
   const owns = holdingsOf(c.code);
-  const holderRows = (c.holders || []).map((h) => line(holderLabel(h, c.holders), KIND_LABEL[h.kind] || "", h.ratio, h.code, h.kind)).join("");
+  const holderRows = (c.holders || []).map((h) => {
+    const act = activistOf(h.name);
+    const kind = (KIND_LABEL[h.kind] || "") + (act ? `・アクティビストとして知られる（${act}）` : "");
+    return line(holderLabel(h, c.holders), kind, h.ratio, h.code, h.kind);
+  }).join("");
+  const activistNote = (c.holders || []).some((h) => activistOf(h.name))
+    ? `<p class="quiet">「アクティビスト」は株主の名称からの判定です。信託口などの名義の向こう側は分かりません。</p>`
+    : "";
   const ownRows = owns.map((e) => line(displayName(e.i), e.i, e.r, e.i, "out")).join("");
   const delta = c.listedDelta === null || Math.abs(c.listedDelta) < 0.5 ? "" : `<p class="delta ${c.listedDelta < 0 ? "down" : ""}">上場の事業会社が持つ比率は前期比 ${signed(c.listedDelta)} です（${c.prior || "前期"}から${c.period || "直近"}）。</p>`;
   const ownTitle = owns.length ? `この会社が持っている上場株　${owns.length}社` : "この会社が持っている上場株";
@@ -220,8 +227,10 @@ function renderDetail() {
     <p class="reading">${escapeHtml(state.mode === "book" ? bookReading(c) : reading(c))}</p>
     ${state.mode === "book" ? "" : mixBar(c)}
     ${state.mode === "book" ? "" : delta}
-    ${state.mode === "book" ? bookBlocks(c) : `<h2 class="block">誰がこの株を持っているか</h2>
+    ${state.mode === "book" ? securitiesWeight(c) + bookBlocks(c) : `<h2 class="block">誰がこの株を持っているか</h2>
     ${holderRows || `<p class="quiet">大株主の表は取れていません。他社の有報に出てきた分だけを、下とグラフに出します。</p>`}
+    ${activistNote}
+    ${securitiesWeight(c)}
     <h2 class="block">${escapeHtml(ownTitle)}</h2>
     ${ownRows || `<p class="quiet">名の一致した保有先はありません。</p>`}`}
   `;
@@ -257,6 +266,63 @@ function supplement(c) {
   if (c.sharesOut) bits.push(`発行済 ${shareShort(c.sharesOut)}`);
   if (c.marketCap) bits.push(`時価総額 ${yen(c.marketCap)}`);
   return `<p class="meta">${bits.join("　")}（${asof}）</p>`;
+}
+
+// アクティビストとして知られる投資家の名称パターン（大株主表の名義のみで判定）。
+const ACTIVISTS = [
+  { re: /シティインデックス|南青山不動産|エスグラント/, label: "村上ファンド系" },
+  { re: /^(㈱|株式会社)?レノ($|[^ァ-ヶ])/, label: "レノ（村上ファンド系）" },
+  { re: /オアシス/, label: "オアシス・マネジメント" },
+  { re: /エリオット|ELLIOTT/i, label: "エリオット" },
+  { re: /エフィッシモ|EFFISSIMO/i, label: "エフィッシモ" },
+  { re: /AVI ?JAPAN|AVIJAPAN|アセット・バリュー|アセットバリュー/i, label: "AVI（アセット・バリュー・インベスターズ）" },
+  { re: /SILCHESTER|シルチェスター/i, label: "シルチェスター" },
+  { re: /DALTON|ダルトン/i, label: "ダルトン" },
+  { re: /SFP ?VALUE|SFPバリュー/i, label: "SFPバリュー・リアリゼーション" },
+  { re: /いちごトラスト|いちごアセット|ICHIGO/i, label: "いちご" },
+  { re: /ストラテジックキャピタル/, label: "ストラテジックキャピタル" },
+  { re: /3D ?インベストメント|スリーディー/, label: "3Dインベストメント" },
+  { re: /バリューアクト|VALUEACT/i, label: "バリューアクト" },
+  { re: /みさき投資/, label: "みさき投資" },
+];
+
+function activistOf(name) {
+  const hit = ACTIVISTS.find((a) => a.re.test(name || ""));
+  return hit ? hit.label : null;
+}
+
+function pricedHoldings(c) {
+  return ((c.securities || {}).names || []).filter((n) => n.value);
+}
+
+function holdingsValue(c) {
+  return pricedHoldings(c).reduce((s, n) => s + n.value, 0);
+}
+
+function validMarketCap(c) {
+  return (c.marketCap || 0) > 0 && (c.sharesOut || 0) >= 100000;
+}
+
+function ratioText(v) {
+  return v >= 100 ? `${Math.round(v)}%` : `${v.toFixed(1)}%`;
+}
+
+function securitiesWeight(c) {
+  const names = (c.securities || {}).names || [];
+  const priced = pricedHoldings(c).slice().sort((a, b) => b.value - a.value);
+  const total = priced.reduce((s, n) => s + n.value, 0);
+  if (!total || !validMarketCap(c)) return "";
+  const ratio = (total / c.marketCap) * 100;
+  const asof = state.data.marketAsOf || "2026-06-16";
+  const top = priced[0];
+  const topLabel = top.code && state.by.has(top.code) ? company(top.code).name : top.name;
+  const top3 = priced.slice(0, 3).reduce((s, n) => s + n.value, 0);
+  const unpriced = names.length - priced.length;
+  const tail = unpriced > 0 ? `残り ${unpriced} 社は非上場などで時価がありません。` : "";
+  return `<h2 class="block">保有有価証券の重み</h2>
+    <p class="reading">保有時価の合計は ${yen(total)} で、この会社の時価総額 ${yen(c.marketCap)} の ${ratioText(ratio)} です。</p>
+    <div class="weightbar" aria-hidden="true"><span style="width:${Math.min(ratio, 100)}%"></span></div>
+    <p class="meta">時価を付けられたのは ${names.length} 社中 ${priced.length} 社。最大は ${escapeHtml(topLabel)}（保有時価の ${ratioText((top.value / total) * 100)}）、上位3社で ${ratioText((top3 / total) * 100)} です。株価は ${asof}。${tail}</p>`;
 }
 
 function bookReading(c) {
@@ -298,7 +364,15 @@ function reading(c) {
   else tail = "上位10名に、大きな上場の事業会社はほぼいません。";
   const bookN = holdingsOf(c.code).length;
   const book = bookN ? `この会社は上場株を ${bookN} 社持っています。` : "";
-  return `筆頭は ${holderLabel(top, c.holders)} で ${pct(top.ratio)}。${instBit}。${tail}${book}`;
+  const actByLabel = new Map();
+  (c.holders || []).forEach((h) => {
+    const label = activistOf(h.name);
+    if (label) actByLabel.set(label, (actByLabel.get(label) || 0) + (h.ratio || 0));
+  });
+  const actBit = actByLabel.size
+    ? `大株主にはアクティビストとして知られる ${[...actByLabel].map(([label, sum]) => `${label}（合計 ${pct(sum)}）`).join("、")} が入っています。`
+    : "";
+  return `筆頭は ${holderLabel(top, c.holders)} で ${pct(top.ratio)}。${instBit}。${tail}${book}${actBit}`;
 }
 
 function mixBar(c) {

@@ -57,6 +57,9 @@ for label, css in (("root", root_css), ("risk", risk_css)):
                 check(f"{label} dark --{tok} contrast", contrast(toks[tok], toks["bg"]) >= 4.5,
                       f"{contrast(toks[tok], toks['bg']):.2f}")
 check("risk disclaimer not faint", not re.search(r"\.disclaimer \{[^}]*var\(--faint\)", risk_css))
+# チップ一覧の社名ボタンがブラウザ既定（白地）のままだと、ダークで白文字×白地になる
+check("risk detail company button styled",
+      re.search(r"\.detail button\[data-code\] \{[^}]*background: transparent", risk_css) is not None)
 
 # 3. 銘柄名: graph.json に名前なしが無く、readings.js の欠落は graph で埋められるものが残っていない
 graph = json.loads((ROOT / "data/graph.json").read_text(encoding="utf-8"))

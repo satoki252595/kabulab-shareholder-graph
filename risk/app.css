@@ -215,6 +215,14 @@ button[aria-current="true"] .code { color: var(--ink); font-weight: 600; }
   font-size: var(--fs-base); line-height: var(--lh-body); text-wrap: pretty;
 }
 .detail p { max-width: var(--measure); }
+.detail button[data-code] {
+  background: transparent; border: 0; border-radius: 6px;
+  padding: 6px 8px; margin: 0 -8px;
+  font-size: 17px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--ink); text-align: left;
+  transition: background-color var(--dur) var(--ease);
+}
+.detail button[data-code]:hover { background: var(--hover); text-decoration: underline; text-underline-offset: 3px; }
 .detail ul { margin: var(--sp-2) 0 0; padding-left: 1.3em; max-width: var(--measure); line-height: 1.9; }
 .detail li::marker { color: var(--faint); }
 .badge {

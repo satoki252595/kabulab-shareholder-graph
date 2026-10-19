@@ -251,6 +251,11 @@ main {
 }
 .meta { margin: 0 0 var(--sp-4); color: var(--muted); font-size: 13px; line-height: 1.7; }
 .reading { margin: 0 0 var(--sp-4); font-size: 15.5px; line-height: 1.85; max-width: 40em; text-wrap: pretty; }
+.weightbar {
+  height: 6px; border-radius: 3px; overflow: hidden;
+  background: var(--hover); margin: 0 0 var(--sp-3);
+}
+.weightbar span { display: block; height: 100%; background: var(--c-corp); }
 .mix {
   display: flex; height: 6px; border-radius: 3px; overflow: hidden;
   background: var(--hover); margin: var(--sp-4) 0 var(--sp-3);
